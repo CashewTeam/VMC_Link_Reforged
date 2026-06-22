@@ -1,0 +1,49 @@
+# Python / Blender bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and packaging artifacts
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# Blender local backup files
+*.blend1
+*.blend2
+*.blend@
+
+# Unity-generated folders inside the bundled SDK
+**/Library/
+**/Temp/
+**/Obj/
+**/Logs/
+**/Build/
+**/Builds/
+**/UserSettings/
+**/MemoryCaptures/
+RhyLiveSDK_Unity-main/
+
+# Editor and OS clutter
+.vscode/
+.idea/
+.vs/
+*.user
+*.suo
+*.swp
+*.swo
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Codex local metadata
+.agents/

@@ -1,0 +1,28 @@
+schema_version = "1.0.0"
+id = "vmc_link"
+version = "0.3.1"
+name = "VMC Link"
+tagline = "VMC receiver for armature and shape keys"
+maintainer = "Internet Addict"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+tags = ["System"]
+
+wheels = [
+  "./wheels/python_osc-1.10.2-py3-none-any.whl",
+]
+
+[permissions]
+network = "Receive OSC / VMC motion data over UDP"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  ".git",
+  "*.zip",
+]
