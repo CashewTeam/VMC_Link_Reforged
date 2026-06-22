@@ -8,9 +8,10 @@
 
 1. 模块化现有插件
 2. 固化 `Create Dummy Armature` 生成的 `VRM` 风格骨架为固定中间层
-3. 以 `Auto Rig Pro` 人形骨架为当前唯一优先适配骨架
-4. 以 `MMD` 标准 Shape Key 为当前唯一优先适配面部标准
-5. 参考 `Auto Rig Pro` 的 remap/humanoid/preset 设计，建立本项目自己的重映射模块
+3. 固化 `ARKit 52 Key` 为固定脸部中间层
+4. 以 `Auto Rig Pro` 人形骨架为当前唯一优先适配骨架
+5. 以 `MMD` 标准 Shape Key 为当前唯一优先适配面部标准
+6. 参考 `Auto Rig Pro` 的 remap/humanoid/preset 设计，建立本项目自己的重映射模块
 
 ## 当前状态
 
@@ -86,19 +87,26 @@
 
 ### 设计方向
 
-输入链路：
+身体输入链路：
 
 `VMC / ARKit / 其他来源 -> VRM 中间层`
 
-输出链路：
+身体输出链路：
 
 `VRM 中间层 -> Auto Rig Pro 目标骨架`
 
-`VRM 中间层 -> MMD Shape Key / 目标面部`
+脸部输入链路：
+
+`RhyLive /Face -> ARKit 52 Key 中间层`
+
+脸部输出链路：
+
+`ARKit 52 Key 中间层 -> MMD Shape Key / 目标面部`
 
 ### 为什么要这样做
 
 - 当前 VMC 数据天然更接近 VRM / humanoid 命名
+- 当前 RhyLive 面部数据天然就是 ARKit 52 Key 语义
 - 中间层固定后，数据接收与目标模型适配可以解耦
 - 调试时可以先验证中间层是否正确，再验证目标重映射是否正确
 - 新增其他目标骨架时，只需要做“中间层 -> 目标”的适配
@@ -106,11 +114,16 @@
 ### 需要补强的能力
 
 - 固定的中间层骨架定义文档
+- 固定的 ARKit 52 Key 面部中间层文档
 - 可重复创建、可复用、可检测的中间层对象
 - 明确区分：
   - 接收骨架
   - 中间层骨架
   - 目标骨架
+- 明确区分：
+  - ARKit 原始数据
+  - ARKit 52 Key 中间层
+  - 目标 Shape Key 标准
 - 为中间层增加更直接的调试状态显示
 
 ## 路线三：当前适配目标收敛
@@ -119,6 +132,7 @@
 
 - 骨架目标：`Auto Rig Pro` 生成人形骨架
 - 面部目标：`MMD` 标准 Shape Key
+- 面部中间层：`ARKit 52 Key`
 
 ### 当前不做
 
@@ -131,7 +145,8 @@
 当前阶段宁可把：
 
 - `VRM 中间层 -> Auto Rig Pro`
-- `ARKit / VMC -> MMD Shape Key`
+- `ARKit 52 Key -> MMD Shape Key`
+- `VMC Blend -> MMD Shape Key`
 
 做深、做稳定、做可保存、做可调试，
 
@@ -171,9 +186,11 @@
 第一阶段：
 
 - `VRM 中间层骨骼 -> Auto Rig Pro 骨骼` 映射表
-- `VMC Blend / ARKit Blend -> MMD Shape Key` 映射表
+- `VMC Blend -> MMD Shape Key` 映射表
+- `ARKit 52 Key -> MMD Shape Key` 映射表
 - 针对 Auto Rig Pro 的 built-in 骨骼预设
 - 针对 MMD 面部的 built-in 表情预设
+- 提供一个固定 ARKit 调试面部模型作为面部链路基准
 
 第二阶段：
 
@@ -202,6 +219,8 @@
 
 - 固化 Dummy Armature 的骨架定义
 - 明确它是 `VRM Intermediate Rig`
+- 固化 `ARKit 52 Key` 为固定脸部中间层
+- 固化 [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend) 为 ARKit 面部调试基准模型
 - 增加识别与重建逻辑
 - 为中间层增加专门面板与状态显示
 
@@ -217,12 +236,13 @@
 - 明确 MMD 目标 Shape Key 名单
 - 分别建立：
   - `VMC -> MMD`
-  - `ARKit -> MMD`
+  - `ARKit 52 Key -> MMD`
 - 提供 built-in MMD 面部预设
 
 ### Phase 5：调试与验证
 
 - 中间层驱动可视化
+- ARKit 52 Key 中间层预览状态
 - 当前根位移来源显示
 - 当前脸部来源显示
 - 当前使用的映射预设显示
@@ -235,8 +255,9 @@
 - 项目完成模块化拆分，主逻辑不再集中于单一文件
 - `Create Dummy Armature` 被正式定义为固定中间层骨架
 - `VMC / ARKit -> VRM 中间层` 链路稳定
+- `RhyLive /Face -> ARKit 52 Key 中间层` 链路稳定
 - `VRM 中间层 -> Auto Rig Pro` 骨骼适配可配置、可保存、可复用
-- `VMC / ARKit -> MMD Shape Key` 面部适配可配置、可保存、可复用
+- `VMC / ARKit 52 Key -> MMD Shape Key` 面部适配可配置、可保存、可复用
 - 所有核心映射均支持预设
 - 调试时可以快速定位问题发生在：
   - 数据源

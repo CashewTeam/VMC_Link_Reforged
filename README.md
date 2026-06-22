@@ -4,6 +4,11 @@
 
 当前项目用于接收 `VMC` 与 `RhyLive ARKit` 数据流，在 Blender 视口中实时预览原始数据，并将其驱动到测试骨架或目标模型。项目现阶段的核心目标不是做“通用一键适配所有骨架”，而是先固化一条稳定、可调试、可扩展的实时驱动链路。
 
+当前可以把系统理解成两条中间层：
+
+- 身体中间层：`VRM` 风格标准骨架
+- 面部中间层：`ARKit 52 Key` 标准表情系数
+
 ## 当前能力
 
 - 接收 `VMC` 数据：
@@ -55,6 +60,10 @@
   - 使用 `/Face`
   - 按 Unity 参考项目中的固定 52 个 ARKit Key 顺序解析
   - 通过 `ARKit Blend Mapping` 驱动目标 Shape Key
+
+当前脸部链路的中间层不是“某个目标模型的 Shape Key 名单”，而是固定的 `ARKit 52 Key` 系数集合。也就是说：
+
+`RhyLive /Face -> ARKit 52 Key 中间层 -> 目标 Shape Key`
 
 ### 3. 实时预览
 
@@ -143,6 +152,29 @@ presets/
 
 这套骨架当前主要用于调试，但项目计划会进一步固化它的中间层地位，使其成为“外部动捕数据 -> VRM 标准中间骨架 -> 目标骨架/目标表情”的中心节点。
 
+## ARKit 面部中间层与调试资产
+
+除了骨骼中间层，项目当前还存在一套固定的面部中间层：
+
+- `ARKIT_BLENDSHAPE_KEYS` 中定义的 52 个 ARKit 标准表情键
+
+它的用途是：
+
+- 作为 `RhyLive /Face` 的统一接收格式
+- 作为 `ARKit Blend Mapping` 的统一源键集合
+- 作为后续 `ARKit -> MMD` 或其他面部标准适配的固定中间层
+
+项目内附带一个用于调试和预览的标准 ARKit 面部文件：
+
+- [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend)
+
+这个文件的用途建议固定为：
+
+- 验证 `/Face` 52 项系数接收是否正常
+- 验证 `ARKit Blend Mapping` 是否正常
+- 作为 ARKit 面部调试基准模型
+- 在适配 `MMD` 面部前，先验证 ARKit 中间层本身没有问题
+
 ## 当前已知边界
 
 - 当前项目代码仍主要集中在 [main.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/main.py)，后续需要模块化。
@@ -185,6 +217,17 @@ presets/
 
 `C:\Users\Con11\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\auto_rig_pro_master`
 
+## 相关项目
+
+- Fork 原项目：
+  - [VMC-Link](https://weforge.xyz/partisan/VMC-Link)
+- ARKit 面部模型来源：
+  - [hinzka/52blendshapes-for-VRoid-face](https://github.com/hinzka/52blendshapes-for-VRoid-face)
+- RhyLive Unity SDK：
+  - [RhythMoAI/RhyLiveSDK_Unity](https://github.com/RhythMoAI/RhyLiveSDK_Unity)
+- Auto-Rig Pro：
+  - [Auto-Rig Pro](https://superhivemarket.com/products/auto-rig-pro)
+
 ## 仓库文件
 
 - [__init__.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/__init__.py)
@@ -193,6 +236,8 @@ presets/
   - 当前主要实现
 - [RhyLiveSDK_Unity-main](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/RhyLiveSDK_Unity-main)
   - RhyLive Unity 参考实现
+- [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend)
+  - ARKit 52 Shape Key 标准调试面部模型
 
 ## 建议使用流程
 
@@ -204,3 +249,5 @@ presets/
 6. 根据目标模型配置三类映射
 7. 将映射保存为 JSON 预设
 8. 针对新模型加载对应预设继续测试
+
+如果是做 ARKit 面部调试，建议优先使用 [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend) 验证 `ARKit 52 Key -> Shape Key` 链路，再继续做 `MMD` 面部适配。
