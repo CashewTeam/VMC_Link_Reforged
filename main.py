@@ -1,4 +1,6 @@
 import bpy
+import json
+import os
 import time
 import traceback
 
@@ -136,6 +138,10 @@ BONE_ALIASES.update(_build_finger_aliases("R"))
 
 def _bone_override_prop_name(vmc_name: str) -> str:
     return f"vmc_link_bone_override_{vmc_name.lower()}"
+
+
+def _normalize_identifier(name: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "_" for ch in str(name))
 
 
 def _normalize_bone_name(name: str) -> str:
@@ -297,6 +303,37 @@ ARKIT_BLENDSHAPE_KEYS = [
     "tongueOut",
 ]
 
+MAPPING_KIND_BONE = "bone"
+MAPPING_KIND_VMC_BLEND = "vmc_blend"
+MAPPING_KIND_ARKIT_BLEND = "arkit_blend"
+
+PRESET_NONE_ID = "__NONE__"
+PRESET_SCHEMA_VERSION = 1
+
+MAPPING_KIND_LABELS = {
+    MAPPING_KIND_BONE: "Bone Mapping",
+    MAPPING_KIND_VMC_BLEND: "VMC Blend Mapping",
+    MAPPING_KIND_ARKIT_BLEND: "ARKit Blend Mapping",
+}
+
+MAPPING_PRESET_SUBDIRS = {
+    MAPPING_KIND_BONE: "bone_maps",
+    MAPPING_KIND_VMC_BLEND: "vmc_blend_maps",
+    MAPPING_KIND_ARKIT_BLEND: "arkit_blend_maps",
+}
+
+MAPPING_PRESET_PROP_NAMES = {
+    MAPPING_KIND_BONE: ("vmc_link_bone_map_preset", "vmc_link_bone_map_save_name"),
+    MAPPING_KIND_VMC_BLEND: ("vmc_link_vmc_blend_preset", "vmc_link_vmc_blend_save_name"),
+    MAPPING_KIND_ARKIT_BLEND: ("vmc_link_arkit_blend_preset", "vmc_link_arkit_blend_save_name"),
+}
+
+_preset_items_cache = {
+    MAPPING_KIND_BONE: [],
+    MAPPING_KIND_VMC_BLEND: [],
+    MAPPING_KIND_ARKIT_BLEND: [],
+}
+
 
 # -------------------------
 # Scene properties (config)
@@ -329,8 +366,9 @@ def _invalidate_bone_map_cache(_self=None, _context=None):
 
 
 def _invalidate_blend_map_cache(_self=None, _context=None):
-    global _cached_blend_map
+    global _cached_blend_map, _cached_arkit_blend_map
     _cached_blend_map = {}
+    _cached_arkit_blend_map = {}
 
 
 def _on_armature_changed(self, _context):
@@ -368,6 +406,10 @@ def _blend_override_prop_name(vmc_name: str) -> str:
     return f"vmc_link_blend_override_{vmc_name.lower()}"
 
 
+def _arkit_override_prop_name(arkit_key: str) -> str:
+    return f"vmc_link_arkit_override_{_normalize_identifier(arkit_key)}"
+
+
 def _ensure_blend_override_props(sc):
     for vmc_name in BLEND_ALIASES:
         prop_name = _blend_override_prop_name(vmc_name)
@@ -383,6 +425,208 @@ def _ensure_blend_override_props(sc):
                 update=_invalidate_blend_map_cache,
             ),
         )
+
+
+def _ensure_arkit_override_props(sc):
+    for arkit_key in ARKIT_BLENDSHAPE_KEYS:
+        prop_name = _arkit_override_prop_name(arkit_key)
+        if hasattr(sc, prop_name):
+            continue
+        setattr(
+            sc,
+            prop_name,
+            bpy.props.StringProperty(
+                name=arkit_key,
+                description=f"Manual mapping for ARKit blend {arkit_key}",
+                default="",
+                update=_invalidate_blend_map_cache,
+            ),
+        )
+
+
+def _mapping_keys(kind: str):
+    if kind == MAPPING_KIND_BONE:
+        return list(BONE_ALIASES.keys())
+    if kind == MAPPING_KIND_VMC_BLEND:
+        return list(BLEND_ALIASES.keys())
+    if kind == MAPPING_KIND_ARKIT_BLEND:
+        return list(ARKIT_BLENDSHAPE_KEYS)
+    raise KeyError(f"Unknown mapping kind: {kind}")
+
+
+def _mapping_prop_name(kind: str, source_key: str) -> str:
+    if kind == MAPPING_KIND_BONE:
+        return _bone_override_prop_name(source_key)
+    if kind == MAPPING_KIND_VMC_BLEND:
+        return _blend_override_prop_name(source_key)
+    if kind == MAPPING_KIND_ARKIT_BLEND:
+        return _arkit_override_prop_name(source_key)
+    raise KeyError(f"Unknown mapping kind: {kind}")
+
+
+def _mapping_kind_label(kind: str) -> str:
+    try:
+        return MAPPING_KIND_LABELS[kind]
+    except KeyError as exc:
+        raise KeyError(f"Unknown mapping kind: {kind}") from exc
+
+
+def _mapping_preset_dir(kind: str) -> str:
+    try:
+        subdir = MAPPING_PRESET_SUBDIRS[kind]
+    except KeyError as exc:
+        raise KeyError(f"Unknown mapping kind: {kind}") from exc
+    return os.path.join(os.path.dirname(__file__), "presets", subdir)
+
+
+def _ensure_mapping_preset_dir(kind: str) -> str:
+    path = _mapping_preset_dir(kind)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _mapping_preset_prop_names(kind: str):
+    try:
+        return MAPPING_PRESET_PROP_NAMES[kind]
+    except KeyError as exc:
+        raise KeyError(f"Unknown mapping kind: {kind}") from exc
+
+
+def _get_mapping_preset_selection(scene, kind: str) -> str:
+    preset_prop, _ = _mapping_preset_prop_names(kind)
+    return str(getattr(scene, preset_prop, PRESET_NONE_ID))
+
+
+def _set_mapping_preset_selection(scene, kind: str, value: str):
+    preset_prop, _ = _mapping_preset_prop_names(kind)
+    setattr(scene, preset_prop, value)
+
+
+def _get_mapping_preset_save_name(scene, kind: str) -> str:
+    _, save_prop = _mapping_preset_prop_names(kind)
+    return str(getattr(scene, save_prop, ""))
+
+
+def _scan_mapping_presets(kind: str):
+    preset_dir = _ensure_mapping_preset_dir(kind)
+    items = [(PRESET_NONE_ID, "None", f"No {_mapping_kind_label(kind)} preset selected")]
+
+    try:
+        names = sorted(
+            file_name
+            for file_name in os.listdir(preset_dir)
+            if file_name.lower().endswith(".json") and os.path.isfile(os.path.join(preset_dir, file_name))
+        )
+    except OSError as e:
+        _warn(f"Failed to list {_mapping_kind_label(kind)} presets", e)
+        names = []
+
+    for file_name in names:
+        label = os.path.splitext(file_name)[0]
+        items.append((file_name, label, f"Load {_mapping_kind_label(kind)} preset '{label}'"))
+
+    _preset_items_cache[kind] = items
+    return items
+
+
+def _enum_mapping_preset_items(kind: str):
+    items = _preset_items_cache.get(kind) or []
+    if not items:
+        items = _scan_mapping_presets(kind)
+    return items
+
+
+def _enum_bone_map_preset_items(_self, _context):
+    return _enum_mapping_preset_items(MAPPING_KIND_BONE)
+
+
+def _enum_vmc_blend_preset_items(_self, _context):
+    return _enum_mapping_preset_items(MAPPING_KIND_VMC_BLEND)
+
+
+def _enum_arkit_blend_preset_items(_self, _context):
+    return _enum_mapping_preset_items(MAPPING_KIND_ARKIT_BLEND)
+
+
+def _refresh_all_mapping_preset_caches():
+    for kind in MAPPING_KIND_LABELS:
+        _scan_mapping_presets(kind)
+
+
+def _sanitize_mapping_preset_filename(name: str) -> str:
+    safe = str(name).strip().replace("/", "_").replace("\\", "_")
+    if not safe:
+        return ""
+    if not safe.lower().endswith(".json"):
+        safe += ".json"
+    return safe
+
+
+def _get_mapping_override(scene, kind: str, source_key: str) -> str:
+    if scene is None:
+        return ""
+
+    prop_name = _mapping_prop_name(kind, source_key)
+    if not hasattr(scene, prop_name):
+        return ""
+    return str(getattr(scene, prop_name, "")).strip()
+
+
+def _set_mapping_override(scene, kind: str, source_key: str, target_name: str):
+    prop_name = _mapping_prop_name(kind, source_key)
+    if hasattr(scene, prop_name):
+        setattr(scene, prop_name, str(target_name).strip())
+
+
+def _clear_mapping_overrides(scene, kind: str):
+    for source_key in _mapping_keys(kind):
+        _set_mapping_override(scene, kind, source_key, "")
+
+
+def _collect_mapping_entries(scene, kind: str):
+    entries = {}
+    for source_key in _mapping_keys(kind):
+        target_name = _get_mapping_override(scene, kind, source_key)
+        if target_name:
+            entries[source_key] = target_name
+    return entries
+
+
+def _apply_mapping_entries(scene, kind: str, entries: dict):
+    _clear_mapping_overrides(scene, kind)
+
+    known_keys = set(_mapping_keys(kind))
+    for source_key, target_name in entries.items():
+        if source_key not in known_keys:
+            continue
+        if not isinstance(target_name, str):
+            continue
+        _set_mapping_override(scene, kind, source_key, target_name)
+
+
+def _mapping_preset_payload(scene, kind: str):
+    return {
+        "version": PRESET_SCHEMA_VERSION,
+        "mapping_kind": kind,
+        "entries": _collect_mapping_entries(scene, kind),
+    }
+
+
+def _load_mapping_preset_payload(payload, kind: str):
+    if not isinstance(payload, dict):
+        raise RuntimeError("Preset JSON must be an object")
+
+    if payload.get("version") != PRESET_SCHEMA_VERSION:
+        raise RuntimeError(f"Unsupported preset version: {payload.get('version')}")
+
+    if payload.get("mapping_kind") != kind:
+        raise RuntimeError(f"Preset kind mismatch: expected '{kind}'")
+
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        raise RuntimeError("Preset JSON field 'entries' must be an object")
+
+    return entries
 
 
 def _get_addon_preferences():
@@ -667,15 +911,45 @@ def _ensure_scene_props():
         update=_on_face_object_changed,
     )
 
-    if not hasattr(sc, "vmc_link_show_advanced"):
-        sc.vmc_link_show_advanced = bpy.props.BoolProperty(
-            name="Show Advanced",
-            description="Show advanced mapping and diagnostics options",
-            default=False,
-        )
+    sc.vmc_link_bone_map_preset = bpy.props.EnumProperty(
+        name="Preset",
+        description="Saved bone mapping preset",
+        items=_enum_bone_map_preset_items,
+    )
+
+    sc.vmc_link_bone_map_save_name = bpy.props.StringProperty(
+        name="Save Name",
+        description="File name for the current bone mapping preset",
+        default="",
+    )
+
+    sc.vmc_link_vmc_blend_preset = bpy.props.EnumProperty(
+        name="Preset",
+        description="Saved VMC blend mapping preset",
+        items=_enum_vmc_blend_preset_items,
+    )
+
+    sc.vmc_link_vmc_blend_save_name = bpy.props.StringProperty(
+        name="Save Name",
+        description="File name for the current VMC blend mapping preset",
+        default="",
+    )
+
+    sc.vmc_link_arkit_blend_preset = bpy.props.EnumProperty(
+        name="Preset",
+        description="Saved ARKit blend mapping preset",
+        items=_enum_arkit_blend_preset_items,
+    )
+
+    sc.vmc_link_arkit_blend_save_name = bpy.props.StringProperty(
+        name="Save Name",
+        description="File name for the current ARKit blend mapping preset",
+        default="",
+    )
 
     _ensure_bone_override_props(sc)
     _ensure_blend_override_props(sc)
+    _ensure_arkit_override_props(sc)
 
 
 def _debug(msg: str):
@@ -725,6 +999,7 @@ _blend_buf = {}
 _arkit_blend_buf = {key: 0.0 for key in ARKIT_BLENDSHAPE_KEYS}
 _cached_bone_map = {}
 _cached_blend_map = {}
+_cached_arkit_blend_map = {}
 _dirty = False
 
 _last_packet_ts = 0.0
@@ -736,13 +1011,14 @@ _recording = False
 
 def _reset_runtime_buffers():
     global _root_buf, _waist_buf, _bone_buf, _blend_buf, _arkit_blend_buf, _dirty
-    global _last_packet_ts, _arkit_last_packet_ts, _next_tick_ts
+    global _last_packet_ts, _arkit_last_packet_ts, _next_tick_ts, _cached_arkit_blend_map
 
     _root_buf = None
     _waist_buf = None
     _bone_buf = {}
     _blend_buf = {}
     _arkit_blend_buf = {key: 0.0 for key in ARKIT_BLENDSHAPE_KEYS}
+    _cached_arkit_blend_map = {}
     _dirty = False
     _last_packet_ts = 0.0
     _arkit_last_packet_ts = 0.0
@@ -878,6 +1154,7 @@ class VMC_LINK_PT_preview_panel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "VMC Link"
+    bl_parent_id = "VMC_LINK_PT_panel"
 
     def draw(self, context):
         layout = self.layout
@@ -922,6 +1199,7 @@ class VMC_LINK_PT_arkit_preview_panel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "VMC Link"
+    bl_parent_id = "VMC_LINK_PT_panel"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -951,6 +1229,108 @@ class VMC_LINK_PT_arkit_preview_panel(bpy.types.Panel):
         _draw_preview_entries(layout, f"ARKit Coefficients ({len(ARKIT_BLENDSHAPE_KEYS)})", preview_entries, "No ARKit coefficients received yet")
 
 
+def _draw_mapping_preset_controls(layout, scene, kind: str):
+    preset_prop, save_prop = _mapping_preset_prop_names(kind)
+
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text="JSON Presets", icon="FILE_FOLDER")
+
+    row = col.row(align=True)
+    row.prop(scene, preset_prop, text="Preset")
+    refresh_op = row.operator("vmc_link.refresh_mapping_presets", text="", icon="FILE_REFRESH")
+    refresh_op.mapping_kind = kind
+
+    load_row = col.row(align=True)
+    load_op = load_row.operator("vmc_link.load_mapping_preset", text="Load", icon="IMPORT")
+    load_op.mapping_kind = kind
+
+    save_row = col.row(align=True)
+    save_row.prop(scene, save_prop, text="Save Name")
+    save_op = save_row.operator("vmc_link.save_mapping_preset", text="Save", icon="EXPORT")
+    save_op.mapping_kind = kind
+
+
+def _draw_bone_mapping_entries(layout, scene):
+    arm_for_search = scene.vmc_link_armature
+    can_search_bones = _has_pose_bones(arm_for_search)
+
+    if not can_search_bones:
+        layout.label(text="Select Armature to enable bone picker", icon="INFO")
+
+    col = layout.column(align=True)
+    for vmc_name in BONE_ALIASES:
+        prop_name = _bone_override_prop_name(vmc_name)
+        if can_search_bones:
+            col.prop_search(scene, prop_name, arm_for_search.pose, "bones", text=vmc_name, icon="BONE_DATA")
+        else:
+            col.prop(scene, prop_name, text=vmc_name)
+
+
+def _draw_blend_mapping_entries(layout, scene, kind: str):
+    face_for_search = scene.vmc_link_face_object
+    can_search_blends = _has_shape_keys(face_for_search)
+
+    if not can_search_blends:
+        layout.label(text="Select Face Mesh with shape keys to enable picker", icon="INFO")
+
+    col = layout.column(align=True)
+    for blend_name in _mapping_keys(kind):
+        prop_name = _mapping_prop_name(kind, blend_name)
+        if can_search_blends:
+            col.prop_search(scene, prop_name, face_for_search.data.shape_keys, "key_blocks", text=blend_name, icon="SHAPEKEY_DATA")
+        else:
+            col.prop(scene, prop_name, text=blend_name)
+
+
+class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
+    bl_label = "Bone Mapping"
+    bl_idname = "VMC_LINK_PT_bone_mapping_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "VMC Link"
+    bl_parent_id = "VMC_LINK_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        _draw_mapping_preset_controls(layout, scene, MAPPING_KIND_BONE)
+        _draw_bone_mapping_entries(layout, scene)
+
+
+class VMC_LINK_PT_vmc_blend_mapping_panel(bpy.types.Panel):
+    bl_label = "VMC Blend Mapping"
+    bl_idname = "VMC_LINK_PT_vmc_blend_mapping_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "VMC Link"
+    bl_parent_id = "VMC_LINK_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        _draw_mapping_preset_controls(layout, scene, MAPPING_KIND_VMC_BLEND)
+        _draw_blend_mapping_entries(layout, scene, MAPPING_KIND_VMC_BLEND)
+
+
+class VMC_LINK_PT_arkit_blend_mapping_panel(bpy.types.Panel):
+    bl_label = "ARKit Blend Mapping"
+    bl_idname = "VMC_LINK_PT_arkit_blend_mapping_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "VMC Link"
+    bl_parent_id = "VMC_LINK_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        _draw_mapping_preset_controls(layout, scene, MAPPING_KIND_ARKIT_BLEND)
+        _draw_blend_mapping_entries(layout, scene, MAPPING_KIND_ARKIT_BLEND)
+
+
 # -------------------------
 # Mapping helpers
 # -------------------------
@@ -972,6 +1352,18 @@ def _get_manual_blend_override(scene, wanted: str):
         return None
 
     prop_name = _blend_override_prop_name(wanted)
+    if not hasattr(scene, prop_name):
+        return None
+
+    value = str(getattr(scene, prop_name, "")).strip()
+    return value if value else None
+
+
+def _get_manual_arkit_override(scene, wanted: str):
+    if scene is None:
+        return None
+
+    prop_name = _arkit_override_prop_name(wanted)
     if not hasattr(scene, prop_name):
         return None
 
@@ -1035,6 +1427,37 @@ def _candidate_vmc_bone_names(wanted: str):
         unique.append(name)
 
     return unique
+
+
+def _get_vmc_bone_pose(raw_bones: dict, wanted: str):
+    if not raw_bones:
+        return None
+
+    lowered = {str(name).lower(): raw for name, raw in raw_bones.items()}
+    normalized = {_normalize_bone_name(name): raw for name, raw in raw_bones.items()}
+
+    for candidate in _candidate_vmc_bone_names(wanted):
+        if candidate in raw_bones:
+            return raw_bones[candidate]
+
+        candidate_lower = candidate.lower()
+        if candidate_lower in lowered:
+            return lowered[candidate_lower]
+
+        candidate_norm = _normalize_bone_name(candidate)
+        if candidate_norm in normalized:
+            return normalized[candidate_norm]
+
+    return None
+
+
+def _is_root_motion_target(target_name: str) -> bool:
+    lowered = str(target_name).strip().lower()
+    if not lowered:
+        return False
+
+    leaf = lowered.rsplit("/", 1)[-1]
+    return leaf in {"waist", "hips", "hip", "pelvis", "root", "center"}
 
 
 def _find_bone_name(arm_obj: bpy.types.Object, wanted: str, scene=None):
@@ -1157,14 +1580,47 @@ def _find_shapekey_name(face_obj: bpy.types.Object, wanted: str, scene=None):
     return None
 
 
+def _find_arkit_shapekey_name(face_obj: bpy.types.Object, wanted: str, scene=None):
+    if not _has_shape_keys(face_obj):
+        return None
+
+    blocks = face_obj.data.shape_keys.key_blocks
+
+    manual = _get_manual_arkit_override(scene, wanted)
+    if manual:
+        if manual in blocks:
+            return manual
+
+        manual_lower = manual.lower()
+        for k in blocks:
+            if k.name.lower() == manual_lower:
+                return k.name
+
+    if wanted in blocks:
+        return wanted
+
+    wanted_lower = wanted.lower()
+    for k in blocks:
+        if k.name.lower() == wanted_lower:
+            return k.name
+
+    wanted_norm = _normalize_identifier(wanted)
+    for k in blocks:
+        if _normalize_identifier(k.name) == wanted_norm:
+            return k.name
+
+    return None
+
+
 def _rebuild_maps(scene):
-    global _cached_bone_map, _cached_blend_map
+    global _cached_bone_map, _cached_blend_map, _cached_arkit_blend_map
 
     arm = scene.vmc_link_armature
     face = scene.vmc_link_face_object
 
     _cached_bone_map = {}
     _cached_blend_map = {}
+    _cached_arkit_blend_map = {}
 
     if arm is not None:
         filled = _autofill_empty_manual_overrides(scene, arm)
@@ -1184,7 +1640,16 @@ def _rebuild_maps(scene):
             if actual:
                 _cached_blend_map[vmc_name] = actual
 
-    _debug(f"Rebuilt maps: bones={len(_cached_bone_map)} blends={len(_cached_blend_map)}")
+        names = set(ARKIT_BLENDSHAPE_KEYS) | set(_arkit_blend_buf.keys())
+        for arkit_name in names:
+            actual = _find_arkit_shapekey_name(face, arkit_name, scene)
+            if actual:
+                _cached_arkit_blend_map[arkit_name] = actual
+
+    _debug(
+        f"Rebuilt maps: bones={len(_cached_bone_map)} vmc_blends={len(_cached_blend_map)} "
+        f"arkit_blends={len(_cached_arkit_blend_map)}"
+    )
 
 
 # -------------------------
@@ -1262,7 +1727,7 @@ def _on_vmc_tra_pos(_address, *args):
         return
 
     target = str(args[0]).lower()
-    if target not in {"human://waist", "waist", "hips", "human://hips"}:
+    if not _is_root_motion_target(target):
         return
 
     try:
@@ -1294,7 +1759,7 @@ def _on_vmc_blend_val(_address, *args):
 
 
 def _on_arkit_face(_address, *args):
-    global _arkit_last_packet_ts
+    global _arkit_last_packet_ts, _dirty
 
     if not args:
         return
@@ -1313,6 +1778,7 @@ def _on_arkit_face(_address, *args):
 
     if updated_any:
         _arkit_last_packet_ts = time.time()
+        _dirty = True
 
 
 # -------------------------
@@ -1359,6 +1825,8 @@ def _apply_timer():
     waist = _waist_buf
     bones = dict(_bone_buf)
     blends = dict(_blend_buf)
+    arkit_blends = dict(_arkit_blend_buf)
+    hips_pose = _get_vmc_bone_pose(bones, "Hips")
     _dirty = False
 
     if not live_preview:
@@ -1369,6 +1837,8 @@ def _apply_timer():
 
     if use_vmc_face and face is not None and not _cached_blend_map:
         _rebuild_maps(scene)
+    elif (not use_vmc_face) and face is not None and not _cached_arkit_blend_map:
+        _rebuild_maps(scene)
 
     driven_bones = set()
     driven_shapes = set()
@@ -1378,7 +1848,10 @@ def _apply_timer():
         if root is not None:
             use_root_loc = any(abs(v) > 1e-6 for v in root[:3])
 
-        # Location fallback: if Root/Pos translation is not provided, use Tra/Pos WAIST.
+        # Location fallback order:
+        # 1. Root/Pos translation
+        # 2. Tra/Pos waist/hips translation
+        # 3. Hips Bone/Pos translation for senders that encode locomotion there
         if use_root_loc:
             root_loc, _ = _convert_vmc_pose(*root)
             if _vec_changed(arm.location, root_loc):
@@ -1387,6 +1860,10 @@ def _apply_timer():
             waist_loc, _ = _convert_vmc_pose(*waist)
             if _vec_changed(arm.location, waist_loc):
                 arm.location = waist_loc
+        elif hips_pose is not None:
+            hips_loc, _ = _convert_vmc_pose(*hips_pose)
+            if _vec_changed(arm.location, hips_loc):
+                arm.location = hips_loc
 
         # Keep root quaternion only when it is non-identity-ish to avoid forcing static identity.
         if root is not None:
@@ -1466,6 +1943,23 @@ def _apply_timer():
             _cached_blend_map[vmc_name] = actual
             if abs(blocks[actual].value - val) > SHAPE_EPS:
                 blocks[actual].value = val
+                driven_shapes.add(actual)
+    elif _has_shape_keys(face):
+        blocks = face.data.shape_keys.key_blocks
+
+        for arkit_name, val in arkit_blends.items():
+            actual = _cached_arkit_blend_map.get(arkit_name) or _find_arkit_shapekey_name(face, arkit_name, scene)
+            if not actual or actual not in blocks:
+                continue
+
+            _cached_arkit_blend_map[arkit_name] = actual
+            try:
+                numeric_val = float(val)
+            except (TypeError, ValueError):
+                continue
+
+            if abs(blocks[actual].value - numeric_val) > SHAPE_EPS:
+                blocks[actual].value = numeric_val
                 driven_shapes.add(actual)
 
     if _recording:
@@ -1584,6 +2078,99 @@ class VMC_LINK_OT_toggle_receiver(bpy.types.Operator):
             else:
                 _start_server(scene)
                 self.report({"INFO"}, f"VMC Link receiver started on {_describe_receiver_endpoints(scene)}")
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_refresh_mapping_presets(bpy.types.Operator):
+    bl_idname = "vmc_link.refresh_mapping_presets"
+    bl_label = "Refresh Mapping Presets"
+
+    mapping_kind: bpy.props.StringProperty()
+
+    def execute(self, context):
+        kind = str(self.mapping_kind)
+        scene = context.scene
+
+        try:
+            items = _scan_mapping_presets(kind)
+            current = _get_mapping_preset_selection(scene, kind)
+            valid_ids = {item[0] for item in items}
+            if current not in valid_ids:
+                _set_mapping_preset_selection(scene, kind, PRESET_NONE_ID)
+            self.report({"INFO"}, f"Refreshed {_mapping_kind_label(kind)} presets")
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_save_mapping_preset(bpy.types.Operator):
+    bl_idname = "vmc_link.save_mapping_preset"
+    bl_label = "Save Mapping Preset"
+
+    mapping_kind: bpy.props.StringProperty()
+
+    def execute(self, context):
+        kind = str(self.mapping_kind)
+        scene = context.scene
+
+        try:
+            file_name = _sanitize_mapping_preset_filename(_get_mapping_preset_save_name(scene, kind))
+            if not file_name:
+                raise RuntimeError("Save Name cannot be empty")
+
+            preset_dir = _ensure_mapping_preset_dir(kind)
+            path = os.path.join(preset_dir, file_name)
+            payload = _mapping_preset_payload(scene, kind)
+
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+            _scan_mapping_presets(kind)
+            _set_mapping_preset_selection(scene, kind, file_name)
+            self.report({"INFO"}, f"Saved {_mapping_kind_label(kind)} preset '{file_name}'")
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_load_mapping_preset(bpy.types.Operator):
+    bl_idname = "vmc_link.load_mapping_preset"
+    bl_label = "Load Mapping Preset"
+
+    mapping_kind: bpy.props.StringProperty()
+
+    def execute(self, context):
+        kind = str(self.mapping_kind)
+        scene = context.scene
+
+        try:
+            file_name = _get_mapping_preset_selection(scene, kind)
+            if file_name == PRESET_NONE_ID:
+                raise RuntimeError("Select a preset to load")
+
+            path = os.path.join(_ensure_mapping_preset_dir(kind), file_name)
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            entries = _load_mapping_preset_payload(payload, kind)
+            _apply_mapping_entries(scene, kind, entries)
+
+            if kind == MAPPING_KIND_BONE:
+                _invalidate_bone_map_cache()
+                _rebuild_maps(scene)
+            elif kind in {MAPPING_KIND_VMC_BLEND, MAPPING_KIND_ARKIT_BLEND}:
+                _invalidate_blend_map_cache()
+                _rebuild_maps(scene)
+
+            self.report({"INFO"}, f"Loaded {_mapping_kind_label(kind)} preset '{file_name}'")
         except Exception as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -1788,46 +2375,6 @@ def draw_ui(layout, context):
     row.operator("vmc_link.create_dummy_armature", icon="ARMATURE_DATA")
     row.operator("vmc_link.rebuild_maps", icon="FILE_REFRESH")
 
-    # Advanced tuning
-    layout.separator()
-    row = layout.row(align=True)
-    icon = "TRIA_DOWN" if scene.vmc_link_show_advanced else "TRIA_RIGHT"
-    row.prop(scene, "vmc_link_show_advanced", text="Advanced", icon=icon, emboss=False)
-
-    if scene.vmc_link_show_advanced:
-        box = layout.box()
-        col = box.column(align=True)
-        col.label(text="Manual bone mapping")
-        manual_col = col.column(align=True)
-
-        arm_for_search = scene.vmc_link_armature
-        can_search_bones = _has_pose_bones(arm_for_search)
-        if not can_search_bones:
-            manual_col.label(text="Select Armature to enable bone picker", icon="ERROR")
-
-        for vmc_name in BONE_ALIASES:
-            prop_name = _bone_override_prop_name(vmc_name)
-            if can_search_bones:
-                manual_col.prop_search(scene, prop_name, arm_for_search.pose, "bones", text=vmc_name, icon="BONE_DATA")
-            else:
-                manual_col.prop(scene, prop_name, text=vmc_name)
-
-        col.separator()
-        col.label(text="Manual blend mapping")
-        blend_col = col.column(align=True)
-
-        face_for_search = scene.vmc_link_face_object
-        can_search_blends = _has_shape_keys(face_for_search)
-        if not can_search_blends:
-            blend_col.label(text="Select Face Mesh with shape keys", icon="ERROR")
-
-        for vmc_name in BLEND_ALIASES:
-            prop_name = _blend_override_prop_name(vmc_name)
-            if can_search_blends:
-                blend_col.prop_search(scene, prop_name, face_for_search.data.shape_keys, "key_blocks", text=vmc_name, icon="SHAPEKEY_DATA")
-            else:
-                blend_col.prop(scene, prop_name, text=vmc_name)
-
 
 # -------------------------
 # Registration
@@ -1836,7 +2383,13 @@ def draw_ui(layout, context):
 _classes = (
     VMC_LINK_PT_preview_panel,
     VMC_LINK_PT_arkit_preview_panel,
+    VMC_LINK_PT_bone_mapping_panel,
+    VMC_LINK_PT_vmc_blend_mapping_panel,
+    VMC_LINK_PT_arkit_blend_mapping_panel,
     VMC_LINK_OT_toggle_receiver,
+    VMC_LINK_OT_refresh_mapping_presets,
+    VMC_LINK_OT_save_mapping_preset,
+    VMC_LINK_OT_load_mapping_preset,
     VMC_LINK_OT_toggle_recording,
     VMC_LINK_OT_create_dummy_armature,
     VMC_LINK_OT_rebuild_maps,
@@ -1845,6 +2398,7 @@ _classes = (
 
 def register():
     _ensure_scene_props()
+    _refresh_all_mapping_preset_caches()
     for c in _classes:
         bpy.utils.register_class(c)
 
@@ -1862,6 +2416,12 @@ def _unregister_scene_props():
         "vmc_link_arkit_port",
         "vmc_link_armature",
         "vmc_link_face_object",
+        "vmc_link_bone_map_preset",
+        "vmc_link_bone_map_save_name",
+        "vmc_link_vmc_blend_preset",
+        "vmc_link_vmc_blend_save_name",
+        "vmc_link_arkit_blend_preset",
+        "vmc_link_arkit_blend_save_name",
         "vmc_link_show_advanced",
     )
 
@@ -1887,6 +2447,14 @@ def _unregister_scene_props():
                 delattr(sc, prop_name)
             except Exception as e:
                 _warn(f"Failed to unregister blend mapping property '{prop_name}'", e)
+
+    for arkit_key in ARKIT_BLENDSHAPE_KEYS:
+        prop_name = _arkit_override_prop_name(arkit_key)
+        if hasattr(sc, prop_name):
+            try:
+                delattr(sc, prop_name)
+            except Exception as e:
+                _warn(f"Failed to unregister ARKit blend mapping property '{prop_name}'", e)
 
 
 def unregister():

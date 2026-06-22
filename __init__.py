@@ -7,10 +7,10 @@
 bl_info = {
     "name": "VMC Link",
     "author": "Internet Addict",
-    "version": (0, 4, 0),
+    "version": (0, 5, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > VMC Link",
-    "description": "Receives VMC and RhyLive ARKit OSC, previews raw data, and applies VMC to armature/shapekeys",
+    "description": "Receives VMC and RhyLive ARKit OSC, previews raw data, and manages mapping presets",
     "category": "System",
 }
 
