@@ -223,8 +223,16 @@ def create_intermediate_rig(context, rebuild: bool = False):
 
         hips = add_bone(edit_bones, "Hips", (0.0, 0.0, 1.00), (0.0, 0.0, 1.18))
         spine = add_bone(edit_bones, "Spine", hips.tail, (0.0, 0.0, 1.36), parent=hips, use_connect=True)
-        chest = add_bone(edit_bones, "Chest", spine.tail, (0.0, 0.0, 1.56), parent=spine, use_connect=True)
-        neck = add_bone(edit_bones, "Neck", chest.tail, (0.0, 0.0, 1.68), parent=chest, use_connect=True)
+        chest = add_bone(edit_bones, "Chest", spine.tail, (0.0, 0.0, 1.50), parent=spine, use_connect=True)
+        upper_chest = add_bone(
+            edit_bones,
+            "UpperChest",
+            chest.tail,
+            (0.0, 0.0, 1.56),
+            parent=chest,
+            use_connect=True,
+        )
+        neck = add_bone(edit_bones, "Neck", upper_chest.tail, (0.0, 0.0, 1.68), parent=upper_chest, use_connect=True)
         head = add_bone(edit_bones, "Head", neck.tail, (0.0, 0.0, 1.88), parent=neck, use_connect=True)
 
         add_bone(edit_bones, "LeftEye", (0.04, -0.02, 1.82), (0.10, -0.02, 1.82), parent=head)
@@ -254,7 +262,13 @@ def create_intermediate_rig(context, rebuild: bool = False):
                     )
 
         def add_arm_and_hand(side_name: str, side_sign: float):
-            shoulder = add_bone(edit_bones, f"{side_name}Shoulder", chest.tail, (0.16 * side_sign, 0.0, 1.54), parent=chest)
+            shoulder = add_bone(
+                edit_bones,
+                f"{side_name}Shoulder",
+                upper_chest.tail,
+                (0.16 * side_sign, 0.0, 1.54),
+                parent=upper_chest,
+            )
             upper_arm = add_bone(edit_bones, f"{side_name}UpperArm", shoulder.tail, (0.46 * side_sign, 0.0, 1.54), parent=shoulder, use_connect=True)
             lower_arm = add_bone(edit_bones, f"{side_name}LowerArm", upper_arm.tail, (0.74 * side_sign, 0.0, 1.50), parent=upper_arm, use_connect=True)
             hand = add_bone(edit_bones, f"{side_name}Hand", lower_arm.tail, (0.88 * side_sign, 0.0, 1.48), parent=lower_arm, use_connect=True)

@@ -31,6 +31,11 @@ def handle_armature_changed(scene):
     arm = getattr(scene, "vmc_link_armature", None)
     if not has_pose_bones(arm):
         return
+    from . import mapping_arp
+
+    if mapping_arp.analyze_armature(arm)["is_arp"]:
+        mapping_arp.apply_standard_scene_mapping(scene)
+        return
     autofill_empty_manual_overrides(scene, arm)
 
 
@@ -276,6 +281,15 @@ def get_vmc_bone_pose(raw_bones: dict, wanted: str):
     return None
 
 
+def canonicalize_vmc_bones(raw_bones: dict):
+    canonical = {}
+    for source_name in constants.BONE_ALIASES:
+        raw = get_vmc_bone_pose(raw_bones, source_name)
+        if raw is not None:
+            canonical[source_name] = raw
+    return canonical
+
+
 def is_root_motion_target(target_name: str) -> bool:
     lowered = str(target_name).strip().lower()
     if not lowered:
@@ -437,15 +451,20 @@ def rebuild_maps(scene):
     state.cached_arkit_blend_map = {}
 
     if arm is not None:
-        filled = autofill_empty_manual_overrides(scene, arm)
-        if filled:
-            helpers.debug(f"Autofilled manual overrides: {filled}")
+        from . import mapping_arp
 
-        names = set(constants.BONE_ALIASES.keys()) | set(state.bone_buf.keys())
-        for vmc_name in names:
-            actual = find_bone_name(arm, vmc_name, scene)
-            if actual:
-                state.cached_bone_map[vmc_name] = actual
+        arp_analysis = mapping_arp.analyze_armature(arm)
+        if arp_analysis["is_arp"]:
+            state.cached_bone_map = mapping_arp.build_runtime_mapping(scene, arm)
+        else:
+            filled = autofill_empty_manual_overrides(scene, arm)
+            if filled:
+                helpers.debug(f"Autofilled manual overrides: {filled}")
+
+            for vmc_name in constants.BONE_ALIASES:
+                actual = find_bone_name(arm, vmc_name, scene)
+                if actual:
+                    state.cached_bone_map[vmc_name] = actual
 
     if has_shape_keys(face):
         names = set(constants.BLEND_ALIASES.keys()) | set(state.blend_buf.keys())

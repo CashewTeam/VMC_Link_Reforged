@@ -6,13 +6,17 @@ import bpy
 _needs_reload = "operators" in locals()
 
 from . import (
+    constants,
     dummy_vrm,
+    helpers,
     mapping,
+    mapping_arp,
     network,
     operators,
     presets,
     properties,
     runtime,
+    state,
     ui_intermediate,
     ui_main,
     ui_mapping,
@@ -22,8 +26,12 @@ from . import (
 
 if _needs_reload:
     for module in (
+        constants,
+        helpers,
+        state,
         dummy_vrm,
         mapping,
+        mapping_arp,
         network,
         operators,
         presets,

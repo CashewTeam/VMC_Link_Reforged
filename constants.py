@@ -22,7 +22,7 @@ ARKIT_ASSET_COLLECTION_NAME = "ArkitFace"
 
 INTERMEDIATE_RIG_ROLE = "vrm_intermediate_rig"
 ARKIT_PREVIEW_FACE_ROLE = "arkit_intermediate_face"
-INTERMEDIATE_RIG_SCHEMA_VERSION = 1
+INTERMEDIATE_RIG_SCHEMA_VERSION = 2
 INTERMEDIATE_RIG_PROP_ROLE = "vmc_link_role"
 INTERMEDIATE_RIG_PROP_SCHEMA = "vmc_link_schema_version"
 
@@ -30,7 +30,8 @@ INTERMEDIATE_RIG_PROP_SCHEMA = "vmc_link_schema_version"
 BONE_ALIASES = {
     "Hips": ["hips", "pelvis", "root"],
     "Spine": ["spine", "spine1", "spine_01"],
-    "Chest": ["chest", "spine2", "spine_02", "upperchest", "spine3", "spine_03"],
+    "Chest": ["chest", "spine2", "spine_02"],
+    "UpperChest": ["upperchest", "upper chest", "spine3", "spine_03"],
     "Neck": ["neck"],
     "Head": ["head"],
     "LeftEye": [
@@ -88,9 +89,11 @@ BONE_ALIASES = {
     "LeftUpperLeg": ["leftupperleg", "left leg", "leftupleg", "upperleg_l", "upperleg.l", "thigh_l", "thigh.l"],
     "LeftLowerLeg": ["leftlowerleg", "left knee", "lowerleg_l", "lowerleg.l", "calf_l", "calf.l"],
     "LeftFoot": ["leftfoot", "left ankle", "foot_l", "foot.l", "ankle_l", "ankle.l"],
+    "LeftToeBase": ["lefttoebase", "left toe", "lefttoes", "toes_l", "toes.l"],
     "RightUpperLeg": ["rightupperleg", "right leg", "rightupleg", "upperleg_r", "upperleg.r", "thigh_r", "thigh.r"],
     "RightLowerLeg": ["rightlowerleg", "right knee", "lowerleg_r", "lowerleg.r", "calf_r", "calf.r"],
     "RightFoot": ["rightfoot", "right ankle", "foot_r", "foot.r", "ankle_r", "ankle.r"],
+    "RightToeBase": ["righttoebase", "right toe", "righttoes", "toes_r", "toes.r"],
 }
 
 _FINGER_SPECS = {
@@ -297,6 +300,7 @@ INTERMEDIATE_REQUIRED_BONES = (
     "Hips",
     "Spine",
     "Chest",
+    "UpperChest",
     "Neck",
     "Head",
     "LeftEye",

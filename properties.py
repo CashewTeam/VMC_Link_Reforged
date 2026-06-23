@@ -1,7 +1,7 @@
 import bpy
 from bpy.app.handlers import persistent
 
-from . import constants, dummy_vrm, mapping, presets, state
+from . import constants, dummy_vrm, mapping, mapping_arp, presets, state
 
 
 def get_addon_preferences():
@@ -93,6 +93,7 @@ def _on_face_source_changed(self, _context):
 
 def _on_armature_changed(self, _context):
     mapping.handle_armature_changed(self)
+    mapping_arp.clear_scene_report(self)
 
 
 def _on_face_object_changed(self, _context):
@@ -117,6 +118,9 @@ FIXED_SCENE_PROPS = (
     "vmc_link_vmc_blend_save_name",
     "vmc_link_arkit_blend_preset",
     "vmc_link_arkit_blend_save_name",
+    "vmc_link_arp_is_detected",
+    "vmc_link_arp_report_title",
+    "vmc_link_arp_report",
 )
 
 
@@ -236,6 +240,24 @@ def ensure_scene_props():
         name="保存名称",
         description="当前 ARKit 表情映射预设的文件名",
         default="",
+    )
+    scene_type.vmc_link_arp_is_detected = bpy.props.BoolProperty(
+        name="ARP 识别结果",
+        description="最近一次 Auto Rig Pro 检查是否通过",
+        default=False,
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_arp_report_title = bpy.props.StringProperty(
+        name="ARP 报告标题",
+        description="最近一次 Auto Rig Pro 检查报告标题",
+        default="",
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_arp_report = bpy.props.StringProperty(
+        name="ARP 报告内容",
+        description="最近一次 Auto Rig Pro 检查报告内容",
+        default="",
+        options={"HIDDEN"},
     )
 
     mapping.ensure_dynamic_scene_props(scene_type)

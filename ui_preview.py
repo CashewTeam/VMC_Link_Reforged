@@ -16,6 +16,8 @@ def draw_vmc_preview(layout):
             col.label(text=f"最近数据包：{age:.2f} 秒前", icon="TIME")
         else:
             col.label(text="等待接收数据包", icon="TIME")
+    elif network.is_paused():
+        col.label(text="接收已暂停", icon="PAUSE")
     else:
         col.label(text="接收器已停止", icon="INFO")
 
@@ -47,6 +49,8 @@ def draw_arkit_preview(layout, scene):
         col.label(text=f"最近数据包：{age:.2f} 秒前", icon="TIME")
     elif network.is_running():
         col.label(text="等待 /Face 数据包", icon="TIME")
+    elif network.is_paused():
+        col.label(text="接收已暂停", icon="PAUSE")
     else:
         col.label(text="接收器已停止", icon="INFO")
 

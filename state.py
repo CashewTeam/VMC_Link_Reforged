@@ -29,6 +29,12 @@ next_ui_redraw_ts = 0.0
 
 recording = False
 
+receiver_session_active = False
+receiver_paused = False
+receiver_armature_snapshots = []
+receiver_face_snapshots = []
+receiver_target_context = {}
+
 
 def reset_runtime_buffers():
     global root_buf, waist_buf, bone_buf, blend_buf, arkit_blend_buf
@@ -51,3 +57,13 @@ def reset_runtime_buffers():
     arkit_last_packet_ts = 0.0
     next_tick_ts = 0.0
     next_ui_redraw_ts = 0.0
+
+
+def reset_receiver_session_state():
+    global receiver_session_active, receiver_paused
+    global receiver_armature_snapshots, receiver_face_snapshots, receiver_target_context
+    receiver_session_active = False
+    receiver_paused = False
+    receiver_armature_snapshots = []
+    receiver_face_snapshots = []
+    receiver_target_context = {}

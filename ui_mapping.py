@@ -1,6 +1,6 @@
 import bpy
 
-from . import constants, mapping, presets
+from . import constants, mapping, mapping_arp, presets
 
 
 def draw_mapping_preset_controls(layout, scene, kind: str):
@@ -57,6 +57,46 @@ def draw_blend_mapping_entries(layout, scene, kind: str):
             col.prop(scene, prop_name, text=blend_name)
 
 
+def _truncate_ui_line(text: str, limit: int = 96) -> str:
+    value = str(text)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "..."
+
+
+def draw_arp_helper(layout, scene):
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text="Auto Rig Pro 辅助", icon="ARMATURE_DATA")
+    col.label(text=f"内建预设：{mapping_arp.ARP_BUILTIN_PRESET_FILE}", icon="INFO")
+    arm_obj = getattr(scene, "vmc_link_armature", None)
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    if mapping_arp.analyze_armature(arm_obj)["is_arp"]:
+        if not mapping.has_pose_bones(preview_arm) or "UpperChest" not in preview_arm.pose.bones:
+            col.label(text="ARP 驱动需要重建新版 VRM 预览骨架", icon="ERROR")
+        else:
+            col.label(text="接收时自动切换四肢 FK，停止后恢复", icon="INFO")
+
+    row = col.row(align=True)
+    row.operator("vmc_link.inspect_arp_rig", text="检查 ARP 骨架", icon="VIEWZOOM")
+    row.operator("vmc_link.autofill_arp_bone_map", text="应用标准 ARP 映射", icon="SHADERFX")
+
+    validate_row = col.row(align=True)
+    validate_row.operator("vmc_link.validate_arp_bone_map", text="校验当前映射", icon="CHECKMARK")
+
+    report_title = str(getattr(scene, "vmc_link_arp_report_title", "")).strip()
+    report_text = str(getattr(scene, "vmc_link_arp_report", "")).strip()
+    if not report_text:
+        col.label(text="先绑定目标骨架，再执行检查、自动填充或校验", icon="INFO")
+        return
+
+    report_box = col.box()
+    icon = "CHECKMARK" if bool(getattr(scene, "vmc_link_arp_is_detected", False)) else "ERROR"
+    report_box.label(text=report_title or "ARP 报告", icon=icon)
+    for line in report_text.splitlines():
+        report_box.label(text=_truncate_ui_line(line), icon="DOT")
+
+
 class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
     bl_label = "骨骼映射"
     bl_idname = "VMC_LINK_PT_bone_mapping_panel"
@@ -69,6 +109,7 @@ class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        draw_arp_helper(layout, scene)
         draw_mapping_preset_controls(layout, scene, constants.MAPPING_KIND_BONE)
         draw_bone_mapping_entries(layout, scene)
 

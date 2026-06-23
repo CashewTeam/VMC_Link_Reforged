@@ -11,8 +11,68 @@ def is_running() -> bool:
     return state.receiver_socket is not None or state.arkit_receiver_socket is not None
 
 
+def is_session_active() -> bool:
+    return bool(state.receiver_session_active)
+
+
+def is_paused() -> bool:
+    return bool(state.receiver_session_active and state.receiver_paused)
+
+
 def _is_arkit_face_source_enabled(scene) -> bool:
     return str(getattr(scene, "vmc_link_face_source", constants.FACE_SOURCE_VMC)) == constants.FACE_SOURCE_RHYLIVE_ARKIT
+
+
+def _build_receiver_handles(scene):
+    bind_host = properties.resolve_bind_host(scene).strip()
+    if not bind_host:
+        raise RuntimeError("接收地址不能为空")
+
+    port = int(scene.vmc_link_port)
+    vmc_socket = None
+    arkit_socket = None
+    try:
+        vmc_socket = create_udp_socket(bind_host, port)
+        vmc_dispatcher = build_vmc_dispatcher()
+        arkit_dispatcher = None
+        if _is_arkit_face_source_enabled(scene):
+            arkit_socket = create_udp_socket(bind_host, int(scene.vmc_link_arkit_port))
+            arkit_dispatcher = build_arkit_dispatcher()
+    except Exception:
+        if vmc_socket is not None:
+            vmc_socket.close()
+        if arkit_socket is not None:
+            arkit_socket.close()
+        raise
+
+    return bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher
+
+
+def _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher):
+    state.receiver_socket = vmc_socket
+    state.dispatcher = vmc_dispatcher
+    state.arkit_receiver_socket = arkit_socket
+    state.arkit_dispatcher = arkit_dispatcher
+
+    if not bpy.app.timers.is_registered(runtime.apply_timer):
+        bpy.app.timers.register(runtime.apply_timer, persistent=True)
+    state.apply_timer_running = True
+
+
+def _close_receiver_handles():
+    if state.receiver_socket is not None:
+        state.receiver_socket.close()
+    if state.arkit_receiver_socket is not None:
+        state.arkit_receiver_socket.close()
+
+    state.receiver_socket = None
+    state.dispatcher = None
+    state.arkit_receiver_socket = None
+    state.arkit_dispatcher = None
+
+    if bpy.app.timers.is_registered(runtime.apply_timer):
+        bpy.app.timers.unregister(runtime.apply_timer)
+    state.apply_timer_running = False
 
 
 def build_vmc_dispatcher():
@@ -42,26 +102,7 @@ def restart_server(scene):
     if not is_running():
         return
 
-    bind_host = properties.resolve_bind_host(scene).strip()
-    if not bind_host:
-        raise RuntimeError("接收地址不能为空")
-
-    port = int(scene.vmc_link_port)
-    new_socket = None
-    new_arkit_socket = None
-    try:
-        new_socket = create_udp_socket(bind_host, port)
-        new_dispatcher = build_vmc_dispatcher()
-        new_arkit_dispatcher = None
-        if _is_arkit_face_source_enabled(scene):
-            new_arkit_socket = create_udp_socket(bind_host, int(scene.vmc_link_arkit_port))
-            new_arkit_dispatcher = build_arkit_dispatcher()
-    except Exception:
-        if new_socket is not None:
-            new_socket.close()
-        if new_arkit_socket is not None:
-            new_arkit_socket.close()
-        raise
+    bind_host, new_socket, new_dispatcher, new_arkit_socket, new_arkit_dispatcher = _build_receiver_handles(scene)
 
     old_socket = state.receiver_socket
     old_arkit_socket = state.arkit_receiver_socket
@@ -79,7 +120,7 @@ def restart_server(scene):
     if old_arkit_socket is not None:
         old_arkit_socket.close()
 
-    helpers.debug(f"Receiver rebound to UDP {bind_host}:{port}")
+    helpers.debug(f"Receiver rebound to UDP {bind_host}:{int(scene.vmc_link_port)}")
     if new_arkit_socket is not None:
         helpers.debug(f"ARKit face receiver rebound to UDP {bind_host}:{scene.vmc_link_arkit_port}")
 
@@ -188,65 +229,61 @@ def on_arkit_face(_address, *args):
 
 
 def start_server(scene):
-    if is_running():
+    if is_session_active():
         raise RuntimeError("接收器已在运行")
 
     state.reset_runtime_buffers()
     state.cached_bone_map = {}
     state.cached_blend_map = {}
-
-    bind_host = properties.resolve_bind_host(scene).strip()
-    if not bind_host:
-        raise RuntimeError("接收地址不能为空")
-
-    port = int(scene.vmc_link_port)
     vmc_socket = None
     arkit_socket = None
     try:
-        vmc_socket = create_udp_socket(bind_host, port)
-        vmc_dispatcher = build_vmc_dispatcher()
-        arkit_dispatcher = None
-        if _is_arkit_face_source_enabled(scene):
-            arkit_socket = create_udp_socket(bind_host, int(scene.vmc_link_arkit_port))
-            arkit_dispatcher = build_arkit_dispatcher()
+        bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
+        runtime.capture_receiver_start_state(scene)
     except Exception:
         if vmc_socket is not None:
             vmc_socket.close()
         if arkit_socket is not None:
             arkit_socket.close()
+        runtime.clear_receiver_session_state()
         raise
 
-    state.receiver_socket = vmc_socket
-    state.dispatcher = vmc_dispatcher
-    state.arkit_receiver_socket = arkit_socket
-    state.arkit_dispatcher = arkit_dispatcher
-
-    if not bpy.app.timers.is_registered(runtime.apply_timer):
-        bpy.app.timers.register(runtime.apply_timer, persistent=True)
-
-    state.apply_timer_running = True
-    helpers.debug(f"Receiver started on UDP {bind_host}:{port}")
+    _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
+    helpers.debug(f"Receiver started on UDP {bind_host}:{int(scene.vmc_link_port)}")
     if state.arkit_receiver_socket is not None:
         helpers.debug(f"ARKit face receiver started on UDP {bind_host}:{scene.vmc_link_arkit_port}")
 
 
+def pause_server():
+    if not is_session_active():
+        raise RuntimeError("接收器尚未启动")
+    if is_paused():
+        raise RuntimeError("接收器已暂停")
+
+    _close_receiver_handles()
+    state.receiver_paused = True
+    helpers.debug("Receiver paused")
+
+
+def resume_server(scene):
+    if not is_session_active():
+        raise RuntimeError("接收器尚未启动")
+    if not is_paused():
+        raise RuntimeError("接收器当前未暂停")
+
+    bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
+    _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
+    state.receiver_paused = False
+    state.next_tick_ts = 0.0
+    helpers.debug(f"Receiver resumed on UDP {bind_host}:{int(scene.vmc_link_port)}")
+
+
 def stop_server(_scene):
-    if not is_running():
+    if not is_session_active() and not is_running():
         return
 
-    if state.receiver_socket is not None:
-        state.receiver_socket.close()
-    if state.arkit_receiver_socket is not None:
-        state.arkit_receiver_socket.close()
-
-    state.receiver_socket = None
-    state.dispatcher = None
-    state.arkit_receiver_socket = None
-    state.arkit_dispatcher = None
+    _close_receiver_handles()
     state.reset_runtime_buffers()
-
-    if bpy.app.timers.is_registered(runtime.apply_timer):
-        bpy.app.timers.unregister(runtime.apply_timer)
-
-    state.apply_timer_running = False
+    runtime.restore_receiver_start_state()
+    runtime.clear_receiver_session_state()
     helpers.debug("Receiver stopped")

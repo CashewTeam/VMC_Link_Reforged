@@ -7,26 +7,33 @@ def draw_main_panel(layout, context):
     scene = context.scene
 
     row = layout.row(align=True)
-    icon = "PAUSE" if network.is_running() else "PLAY"
-    label = "停止接收" if network.is_running() else "启动接收"
-    row.operator("vmc_link.toggle_receiver", text=label, icon=icon)
+    if network.is_session_active():
+        pause_label = "继续接收" if network.is_paused() else "暂停接收"
+        pause_icon = "PLAY" if network.is_paused() else "PAUSE"
+        row.operator("vmc_link.pause_receiver", text=pause_label, icon=pause_icon)
+        row.operator("vmc_link.stop_receiver", text="停止接收", icon="CANCEL")
+    else:
+        row.operator("vmc_link.start_receiver", text="启动接收", icon="PLAY")
 
     rec_row = layout.row(align=True)
     rec_icon = "REC" if not runtime.is_recording() else "PAUSE"
     rec_label = "开始录制" if not runtime.is_recording() else "停止录制"
     rec_row.operator("vmc_link.toggle_recording", text=rec_label, icon=rec_icon)
 
-    if network.is_running():
-        last_pkt = runtime.get_latest_receiver_timestamp(scene)
-        if last_pkt == 0.0:
-            layout.label(text="等待连接", icon="TIME")
-        elif (time.time() - last_pkt) <= 2.0:
-            if getattr(scene, "vmc_link_live_preview", True):
-                layout.label(text="已连接", icon="CHECKMARK")
-            else:
-                layout.label(text="仅更新预览层", icon="INFO")
+    if network.is_session_active():
+        if network.is_paused():
+            layout.label(text="已暂停", icon="PAUSE")
         else:
-            layout.label(text="连接中断", icon="ERROR")
+            last_pkt = runtime.get_latest_receiver_timestamp(scene)
+            if last_pkt == 0.0:
+                layout.label(text="等待连接", icon="TIME")
+            elif (time.time() - last_pkt) <= 2.0:
+                if getattr(scene, "vmc_link_live_preview", True):
+                    layout.label(text="已连接", icon="CHECKMARK")
+                else:
+                    layout.label(text="仅更新预览层", icon="INFO")
+            else:
+                layout.label(text="连接中断", icon="ERROR")
 
     layout.separator()
     layout.label(text="接收设置", icon="PREFERENCES")
