@@ -21,6 +21,62 @@ def _get_role_tag(obj):
     return getter(constants.INTERMEDIATE_RIG_PROP_ROLE)
 
 
+def _has_child_collection(parent_collection, child_collection) -> bool:
+    return parent_collection.children.get(child_collection.name) is not None
+
+
+def _has_collection_object(collection, obj) -> bool:
+    return collection.objects.get(obj.name) is not None
+
+
+def ensure_plugin_collection(scene):
+    plugin_collection = bpy.data.collections.get(constants.PLUGIN_COLLECTION_NAME)
+    if plugin_collection is None:
+        plugin_collection = bpy.data.collections.new(constants.PLUGIN_COLLECTION_NAME)
+    if not _has_child_collection(scene.collection, plugin_collection):
+        scene.collection.children.link(plugin_collection)
+    return plugin_collection
+
+
+def _move_object_to_plugin_collection(scene, obj):
+    plugin_collection = ensure_plugin_collection(scene)
+    if not _has_collection_object(plugin_collection, obj):
+        plugin_collection.objects.link(obj)
+
+    for collection in list(getattr(obj, "users_collection", ())):
+        if collection == plugin_collection:
+            continue
+        try:
+            collection.objects.unlink(obj)
+        except RuntimeError:
+            pass
+
+    return plugin_collection
+
+
+def _ensure_object_in_plugin_collection(scene, obj):
+    plugin_collection = ensure_plugin_collection(scene)
+    if not _has_collection_object(plugin_collection, obj):
+        plugin_collection.objects.link(obj)
+    return plugin_collection
+
+
+def _place_collection_under_plugin(scene, child_collection):
+    plugin_collection = ensure_plugin_collection(scene)
+    if not _has_child_collection(plugin_collection, child_collection):
+        plugin_collection.children.link(child_collection)
+    if child_collection != plugin_collection and _has_child_collection(scene.collection, child_collection):
+        scene.collection.children.unlink(child_collection)
+    return plugin_collection
+
+
+def _iter_collection_objects(collection):
+    all_objects = getattr(collection, "all_objects", None)
+    if all_objects is not None:
+        return list(all_objects)
+    return list(collection.objects)
+
+
 def get_expected_intermediate_bone_names():
     return list(constants.INTERMEDIATE_REQUIRED_BONES) + list(constants.INTERMEDIATE_OPTIONAL_BONES)
 
@@ -155,8 +211,7 @@ def create_intermediate_rig(context, rebuild: bool = False):
 
         arm_data = bpy.data.armatures.new(constants.DUMMY_ARMATURE_NAME)
         arm_obj = bpy.data.objects.new(constants.DUMMY_ARMATURE_NAME, arm_data)
-        link_collection = context.collection or scene.collection
-        link_collection.objects.link(arm_obj)
+        _move_object_to_plugin_collection(scene, arm_obj)
 
         bpy.ops.object.select_all(action="DESELECT")
         context.view_layer.objects.active = arm_obj
@@ -261,6 +316,14 @@ def import_arkit_preview_face(context):
     existing_faces = _find_existing_arkit_preview_faces(scene)
     if existing_faces:
         face_obj = existing_faces[0]
+        placed_in_asset_collection = False
+        for collection in getattr(face_obj, "users_collection", ()):
+            if collection.name == constants.ARKIT_ASSET_COLLECTION_NAME:
+                _place_collection_under_plugin(scene, collection)
+                placed_in_asset_collection = True
+                break
+        if not placed_in_asset_collection:
+            _ensure_object_in_plugin_collection(scene, face_obj)
         tag_arkit_preview_face(face_obj)
         scene.vmc_link_preview_face_object = face_obj
         return face_obj
@@ -269,20 +332,22 @@ def import_arkit_preview_face(context):
     if not os.path.exists(asset_path):
         raise RuntimeError(f"ARKit 调试资产不存在: {asset_path}")
 
-    before_objects = set(bpy.data.objects)
     with bpy.data.libraries.load(asset_path, link=False) as (data_from, data_to):
-        data_to.objects = list(data_from.objects)
+        if constants.ARKIT_ASSET_COLLECTION_NAME not in data_from.collections:
+            raise RuntimeError(f"ARKit 调试资产中缺少集合：{constants.ARKIT_ASSET_COLLECTION_NAME}")
+        data_to.collections = [constants.ARKIT_ASSET_COLLECTION_NAME]
 
-    imported_objects = [obj for obj in data_to.objects if obj is not None and obj not in before_objects]
-    link_collection = context.collection or scene.collection
-    for obj in imported_objects:
-        if obj.name not in scene.objects:
-            try:
-                link_collection.objects.link(obj)
-            except RuntimeError:
-                pass
+    imported_collection = next((collection for collection in data_to.collections if collection is not None), None)
+    if imported_collection is None:
+        raise RuntimeError("追加 ARKit 调试集合失败")
 
-    mesh_candidates = [obj for obj in imported_objects if getattr(obj, "type", None) == "MESH"]
+    _place_collection_under_plugin(scene, imported_collection)
+
+    mesh_candidates = [
+        obj
+        for obj in _iter_collection_objects(imported_collection)
+        if getattr(obj, "type", None) == "MESH"
+    ]
     if not mesh_candidates:
         raise RuntimeError("ARKit 调试资产中未找到可用的面部模型")
 
