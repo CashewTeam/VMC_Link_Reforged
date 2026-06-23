@@ -65,6 +65,7 @@ def tag_view3d_ui_redraw():
     if window_manager is None:
         return
 
+    # Avoid forcing full viewport redraw on every receiver tick.
     for window in getattr(window_manager, "windows", []):
         screen = getattr(window, "screen", None)
         if screen is None:
@@ -72,11 +73,26 @@ def tag_view3d_ui_redraw():
         for area in screen.areas:
             if area.type != "VIEW_3D":
                 continue
-            area.tag_redraw()
             for region in area.regions:
                 if region.type == "UI":
                     region.tag_redraw()
-                    break
+
+
+def tag_view3d_ui_redraw_if_due(now: float, force: bool = False, interval: float = 0.1):
+    if not force and now < state.next_ui_redraw_ts:
+        return
+    state.next_ui_redraw_ts = now + interval
+    tag_view3d_ui_redraw()
+
+
+def _ensure_preview_cache_targets(preview_arm, preview_face):
+    if preview_arm is not state.preview_armature_ref:
+        state.preview_armature_ref = preview_arm
+        state.preview_cached_bone_map = {}
+
+    if preview_face is not state.preview_face_ref:
+        state.preview_face_ref = preview_face
+        state.preview_cached_arkit_blend_map = {}
 
 
 def draw_preview_entries(layout, title: str, entries, empty_text: str):
@@ -159,15 +175,20 @@ def _apply_preview_armature(preview_arm, root, waist, bones, blends):
             preview_arm.rotation_quaternion = root_quat
 
     pose = preview_arm.pose.bones
-    eye_left_name = mapping.find_bone_name(preview_arm, "LeftEye", None)
-    eye_right_name = mapping.find_bone_name(preview_arm, "RightEye", None)
+    eye_left_name = state.preview_cached_bone_map.get("LeftEye") or mapping.find_bone_name(preview_arm, "LeftEye", None)
+    eye_right_name = state.preview_cached_bone_map.get("RightEye") or mapping.find_bone_name(preview_arm, "RightEye", None)
+    if eye_left_name:
+        state.preview_cached_bone_map["LeftEye"] = eye_left_name
+    if eye_right_name:
+        state.preview_cached_bone_map["RightEye"] = eye_right_name
     eye_left_driven_by_bone = False
     eye_right_driven_by_bone = False
 
     for vmc_name, raw in bones.items():
-        actual = mapping.find_bone_name(preview_arm, vmc_name, None)
+        actual = state.preview_cached_bone_map.get(vmc_name) or mapping.find_bone_name(preview_arm, vmc_name, None)
         if not actual or actual not in pose:
             continue
+        state.preview_cached_bone_map[vmc_name] = actual
 
         pose_bone = pose[actual]
         px, py, pz, qx, qy, qz, qw = raw
@@ -211,9 +232,10 @@ def _apply_preview_face(preview_face, arkit_blends):
 
     blocks = preview_face.data.shape_keys.key_blocks
     for arkit_name, val in arkit_blends.items():
-        actual = mapping.find_arkit_shapekey_name(preview_face, arkit_name, None)
+        actual = state.preview_cached_arkit_blend_map.get(arkit_name) or mapping.find_arkit_shapekey_name(preview_face, arkit_name, None)
         if not actual or actual not in blocks:
             continue
+        state.preview_cached_arkit_blend_map[arkit_name] = actual
         try:
             numeric_val = float(val)
         except (TypeError, ValueError):
@@ -259,6 +281,7 @@ def apply_timer():
     if preview_arm is None and preview_face is None and arm is None and face is None:
         return rate
     if not state.dirty:
+        tag_view3d_ui_redraw_if_due(now)
         return rate
 
     root = state.root_buf
@@ -268,10 +291,13 @@ def apply_timer():
     arkit_blends = dict(state.arkit_blend_buf)
     hips_pose = mapping.get_vmc_bone_pose(bones, "Hips")
     state.dirty = False
+    _ensure_preview_cache_targets(preview_arm, preview_face)
 
     _apply_preview_armature(preview_arm, root, waist, bones, blends)
     if use_arkit_face:
         _apply_preview_face(preview_face, arkit_blends)
+
+    tag_view3d_ui_redraw_if_due(now, force=True)
 
     if not live_preview:
         return rate

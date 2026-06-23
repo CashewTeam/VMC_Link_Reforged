@@ -38,12 +38,11 @@ if _needs_reload:
 
 
 CLASSES = (
-    ui_preview.VMC_LINK_PT_preview_panel,
-    ui_preview.VMC_LINK_PT_arkit_preview_panel,
     ui_intermediate.VMC_LINK_PT_intermediate_panel,
     ui_mapping.VMC_LINK_PT_bone_mapping_panel,
     ui_mapping.VMC_LINK_PT_vmc_blend_mapping_panel,
     ui_mapping.VMC_LINK_PT_arkit_blend_mapping_panel,
+    *ui_preview.CLASSES,
     *operators.CLASSES,
 )
 

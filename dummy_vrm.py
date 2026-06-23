@@ -172,15 +172,16 @@ def _remove_object(obj):
             bpy.data.meshes.remove(data)
 
 
-def _find_existing_intermediate_objects():
+def _find_existing_dummy_armatures(scene):
+    plugin_collection = bpy.data.collections.get(constants.PLUGIN_COLLECTION_NAME)
+    if plugin_collection is None:
+        return []
+
     matches = []
-    for obj in bpy.data.objects:
+    for obj in _iter_collection_objects(plugin_collection):
         if getattr(obj, "type", None) != "ARMATURE":
             continue
-        if is_vrm_intermediate_rig(obj):
-            matches.append(obj)
-            continue
-        if obj.name == constants.DUMMY_ARMATURE_NAME or obj.name.startswith(constants.DUMMY_ARMATURE_NAME + "_"):
+        if obj.name == constants.DUMMY_ARMATURE_NAME or obj.name.startswith(constants.DUMMY_ARMATURE_NAME + "."):
             matches.append(obj)
     return matches
 
@@ -206,7 +207,7 @@ def create_intermediate_rig(context, rebuild: bool = False):
             bpy.ops.object.mode_set(mode="OBJECT")
 
         if constants.DUMMY_DELETE_OLD or rebuild:
-            for obj in list(_find_existing_intermediate_objects()):
+            for obj in list(_find_existing_dummy_armatures(scene)):
                 _remove_object(obj)
 
         arm_data = bpy.data.armatures.new(constants.DUMMY_ARMATURE_NAME)
