@@ -32,8 +32,9 @@
   - `Bone Mapping`
   - `VMC Blend Mapping`
   - `ARKit Blend Mapping`
-- 支持创建测试用 `VRM` 风格标准骨架：
-  - `Create Dummy Armature`
+- 支持创建和重建固定 `VRM Intermediate Rig`：
+  - `Create Intermediate Rig`
+  - `Rebuild Intermediate Rig`
 
 ## 当前工作方式
 
@@ -87,6 +88,7 @@
 - 目标 `Face Mesh`
 - `Create Dummy Armature`
 - `Rebuild Mapping`
+- `Intermediate Layers`
 
 ### 子面板
 
@@ -100,6 +102,9 @@
   - 管理 VMC 表情到 Blender Shape Key 的映射
 - `ARKit Blend Mapping`
   - 管理 ARKit 52 Key 到 Blender Shape Key 的映射
+- `Intermediate Layers`
+  - 显示 `VRM Intermediate Rig` 识别状态
+  - 显示 ARKit 52 Key 中间层覆盖率与调试资产状态
 
 ## 映射与预设
 
@@ -141,16 +146,23 @@ presets/
 - `vmc_blend`
 - `arkit_blend`
 
-## Create Dummy Armature 的定位
+## VRM Intermediate Rig 的定位
 
-`Create Dummy Armature` 当前会创建一套固定命名的人形测试骨架，用于：
+当前面板里显示为 `Create Intermediate Rig`，对应的实现仍兼容历史 operator `Create Dummy Armature`。
+
+它当前会创建一套固定命名的人形标准骨架，用于：
 
 - 验证接收链路是否正常
 - 验证 VMC 骨骼映射是否正常
 - 验证整体位移、眼球桥接、表情映射等行为
-- 作为后续“统一中间层骨架”的雏形
+- 作为正式固定的 `VRM Intermediate Rig`
 
-这套骨架当前主要用于调试，但项目计划会进一步固化它的中间层地位，使其成为“外部动捕数据 -> VRM 标准中间骨架 -> 目标骨架/目标表情”的中心节点。
+当前这套骨架已经被固化为中间层，并补充了：
+
+- 识别逻辑
+- 重建逻辑
+- 中间层状态面板
+- 骨骼覆盖率与缺失提示
 
 ## ARKit 面部中间层与调试资产
 
@@ -177,7 +189,7 @@ presets/
 
 ## 当前已知边界
 
-- 当前项目代码仍主要集中在 [main.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/main.py)，后续需要模块化。
+- 当前项目已经完成首轮模块化，`main.py` 只负责装配与注册，主要逻辑已拆分到 `constants.py`、`properties.py`、`network.py`、`runtime.py`、`mapping.py`、`presets.py`、`dummy_vrm.py` 和各个 `ui_*.py` 模块。
 - 当前支持的实时数据来源主要是：
   - `VMC`
   - `RhyLive ARKit OSC /Face`
@@ -233,7 +245,15 @@ presets/
 - [__init__.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/__init__.py)
   - 插件入口与 Blender 注册
 - [main.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/main.py)
-  - 当前主要实现
+  - 模块装配与注册入口
+- `constants.py` / `properties.py` / `network.py` / `runtime.py`
+  - 常量、Scene 属性、网络接收、运行时驱动
+- `mapping.py` / `presets.py`
+  - 映射查找、缓存重建、JSON 预设
+- `dummy_vrm.py` / `ui_intermediate.py`
+  - `VRM Intermediate Rig` 创建、识别、重建与状态面板
+- `ui_main.py` / `ui_preview.py` / `ui_mapping.py`
+  - 主面板、预览面板、映射面板
 - [RhyLiveSDK_Unity-main](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/RhyLiveSDK_Unity-main)
   - RhyLive Unity 参考实现
 - [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend)

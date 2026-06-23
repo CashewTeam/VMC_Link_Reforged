@@ -1,0 +1,292 @@
+import os
+
+import bpy
+from mathutils import Vector
+
+from . import constants, helpers
+
+
+def _asset_path(file_name: str) -> str:
+    return os.path.join(os.path.dirname(__file__), "assets", file_name)
+
+
+def get_arkit_debug_asset_path() -> str:
+    return _asset_path("Arkitface.blend")
+
+
+def _get_role_tag(obj):
+    getter = getattr(obj, "get", None)
+    if getter is None:
+        return None
+    return getter(constants.INTERMEDIATE_RIG_PROP_ROLE)
+
+
+def get_expected_intermediate_bone_names():
+    return list(constants.INTERMEDIATE_REQUIRED_BONES) + list(constants.INTERMEDIATE_OPTIONAL_BONES)
+
+
+def _pose_bone_names(arm_obj):
+    pose = getattr(arm_obj, "pose", None)
+    bones = getattr(pose, "bones", None)
+    if bones is None:
+        return set()
+    return {bone.name for bone in bones}
+
+
+def tag_intermediate_rig(arm_obj):
+    if arm_obj is None:
+        return
+    arm_obj[constants.INTERMEDIATE_RIG_PROP_ROLE] = constants.INTERMEDIATE_RIG_ROLE
+    arm_obj[constants.INTERMEDIATE_RIG_PROP_SCHEMA] = constants.INTERMEDIATE_RIG_SCHEMA_VERSION
+    if getattr(arm_obj, "data", None) is not None:
+        arm_obj.data[constants.INTERMEDIATE_RIG_PROP_ROLE] = constants.INTERMEDIATE_RIG_ROLE
+        arm_obj.data[constants.INTERMEDIATE_RIG_PROP_SCHEMA] = constants.INTERMEDIATE_RIG_SCHEMA_VERSION
+
+
+def tag_arkit_preview_face(face_obj):
+    if face_obj is None:
+        return
+    face_obj[constants.INTERMEDIATE_RIG_PROP_ROLE] = constants.ARKIT_PREVIEW_FACE_ROLE
+    face_obj[constants.INTERMEDIATE_RIG_PROP_SCHEMA] = constants.INTERMEDIATE_RIG_SCHEMA_VERSION
+    if getattr(face_obj, "data", None) is not None:
+        face_obj.data[constants.INTERMEDIATE_RIG_PROP_ROLE] = constants.ARKIT_PREVIEW_FACE_ROLE
+        face_obj.data[constants.INTERMEDIATE_RIG_PROP_SCHEMA] = constants.INTERMEDIATE_RIG_SCHEMA_VERSION
+
+
+def get_intermediate_rig_match_info(arm_obj):
+    names = _pose_bone_names(arm_obj)
+    required_present = [name for name in constants.INTERMEDIATE_REQUIRED_BONES if name in names]
+    required_missing = [name for name in constants.INTERMEDIATE_REQUIRED_BONES if name not in names]
+    optional_present = [name for name in constants.INTERMEDIATE_OPTIONAL_BONES if name in names]
+    is_tagged = False
+    if arm_obj is not None:
+        is_tagged = (
+            arm_obj.get(constants.INTERMEDIATE_RIG_PROP_ROLE) == constants.INTERMEDIATE_RIG_ROLE
+            or getattr(getattr(arm_obj, "data", None), "get", lambda *_args, **_kwargs: None)(constants.INTERMEDIATE_RIG_PROP_ROLE)
+            == constants.INTERMEDIATE_RIG_ROLE
+        )
+    return {
+        "required_present": required_present,
+        "required_missing": required_missing,
+        "optional_present": optional_present,
+        "is_tagged": bool(is_tagged),
+    }
+
+
+def is_vrm_intermediate_rig(arm_obj) -> bool:
+    if arm_obj is None or getattr(arm_obj, "type", None) != "ARMATURE":
+        return False
+    info = get_intermediate_rig_match_info(arm_obj)
+    return info["is_tagged"] or not info["required_missing"]
+
+
+def _count_matching_arkit_keys(face_obj):
+    shape_keys = getattr(getattr(face_obj, "data", None), "shape_keys", None)
+    key_blocks = getattr(shape_keys, "key_blocks", None)
+    if key_blocks is None:
+        return 0
+
+    arkit_key_set = {helpers.normalize_identifier(name) for name in constants.ARKIT_BLENDSHAPE_KEYS}
+    return sum(1 for key in key_blocks if helpers.normalize_identifier(key.name) in arkit_key_set)
+
+
+def is_arkit_preview_face(face_obj) -> bool:
+    if face_obj is None or getattr(face_obj, "type", None) != "MESH":
+        return False
+
+    if _get_role_tag(face_obj) == constants.ARKIT_PREVIEW_FACE_ROLE:
+        return True
+
+    data = getattr(face_obj, "data", None)
+    if data is not None:
+        getter = getattr(data, "get", None)
+        if getter is not None and getter(constants.INTERMEDIATE_RIG_PROP_ROLE) == constants.ARKIT_PREVIEW_FACE_ROLE:
+            return True
+
+    return _count_matching_arkit_keys(face_obj) >= len(constants.ARKIT_BLENDSHAPE_KEYS)
+
+
+def _remove_object(obj):
+    data = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if data and data.users == 0:
+        if isinstance(data, bpy.types.Armature):
+            bpy.data.armatures.remove(data)
+        elif isinstance(data, bpy.types.Mesh):
+            bpy.data.meshes.remove(data)
+
+
+def _find_existing_intermediate_objects():
+    matches = []
+    for obj in bpy.data.objects:
+        if getattr(obj, "type", None) != "ARMATURE":
+            continue
+        if is_vrm_intermediate_rig(obj):
+            matches.append(obj)
+            continue
+        if obj.name == constants.DUMMY_ARMATURE_NAME or obj.name.startswith(constants.DUMMY_ARMATURE_NAME + "_"):
+            matches.append(obj)
+    return matches
+
+
+def _find_existing_arkit_preview_faces(scene):
+    return [obj for obj in scene.objects if is_arkit_preview_face(obj)]
+
+
+def create_intermediate_rig(context, rebuild: bool = False):
+    scene = context.scene
+
+    def add_bone(edit_bones, name: str, head, tail, parent=None, use_connect=False):
+        bone = edit_bones.new(name)
+        bone.head = Vector(head)
+        bone.tail = Vector(tail)
+        if parent is not None:
+            bone.parent = parent
+            bone.use_connect = use_connect
+        return bone
+
+    try:
+        if context.object and context.object.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        if constants.DUMMY_DELETE_OLD or rebuild:
+            for obj in list(_find_existing_intermediate_objects()):
+                _remove_object(obj)
+
+        arm_data = bpy.data.armatures.new(constants.DUMMY_ARMATURE_NAME)
+        arm_obj = bpy.data.objects.new(constants.DUMMY_ARMATURE_NAME, arm_data)
+        link_collection = context.collection or scene.collection
+        link_collection.objects.link(arm_obj)
+
+        bpy.ops.object.select_all(action="DESELECT")
+        context.view_layer.objects.active = arm_obj
+        arm_obj.select_set(True)
+
+        bpy.ops.object.mode_set(mode="EDIT")
+        edit_bones = arm_data.edit_bones
+
+        hips = add_bone(edit_bones, "Hips", (0.0, 0.0, 1.00), (0.0, 0.0, 1.18))
+        spine = add_bone(edit_bones, "Spine", hips.tail, (0.0, 0.0, 1.36), parent=hips, use_connect=True)
+        chest = add_bone(edit_bones, "Chest", spine.tail, (0.0, 0.0, 1.56), parent=spine, use_connect=True)
+        neck = add_bone(edit_bones, "Neck", chest.tail, (0.0, 0.0, 1.68), parent=chest, use_connect=True)
+        head = add_bone(edit_bones, "Head", neck.tail, (0.0, 0.0, 1.88), parent=neck, use_connect=True)
+
+        add_bone(edit_bones, "LeftEye", (0.04, -0.02, 1.82), (0.10, -0.02, 1.82), parent=head)
+        add_bone(edit_bones, "RightEye", (-0.04, -0.02, 1.82), (-0.10, -0.02, 1.82), parent=head)
+
+        def add_finger_chains(hand_bone, side_suffix: str, side_sign: float):
+            finger_defs = (
+                ("Thumb", (0, 1, 2), [(0.90, -0.03, 1.47), (0.94, -0.06, 1.46), (0.98, -0.08, 1.45), (1.02, -0.10, 1.44)]),
+                ("IndexFinger", (1, 2, 3), [(0.90, 0.03, 1.48), (0.96, 0.03, 1.48), (1.01, 0.03, 1.48), (1.05, 0.03, 1.48)]),
+                ("MiddleFinger", (1, 2, 3), [(0.90, 0.00, 1.48), (0.97, 0.00, 1.48), (1.03, 0.00, 1.48), (1.08, 0.00, 1.48)]),
+                ("RingFinger", (1, 2, 3), [(0.90, -0.03, 1.48), (0.96, -0.03, 1.48), (1.01, -0.03, 1.48), (1.05, -0.03, 1.48)]),
+                ("LittleFinger", (1, 2, 3), [(0.90, -0.06, 1.48), (0.95, -0.06, 1.48), (0.99, -0.06, 1.48), (1.03, -0.06, 1.48)]),
+            )
+
+            for finger_name, joint_indices, points in finger_defs:
+                prev = hand_bone
+                for idx, joint_idx in enumerate(joint_indices):
+                    head_pos = (points[idx][0] * side_sign, points[idx][1], points[idx][2])
+                    tail_pos = (points[idx + 1][0] * side_sign, points[idx + 1][1], points[idx + 1][2])
+                    prev = add_bone(
+                        edit_bones,
+                        f"{finger_name}{joint_idx}_{side_suffix}",
+                        head_pos,
+                        tail_pos,
+                        parent=prev,
+                        use_connect=(idx > 0),
+                    )
+
+        def add_arm_and_hand(side_name: str, side_sign: float):
+            shoulder = add_bone(edit_bones, f"{side_name}Shoulder", chest.tail, (0.16 * side_sign, 0.0, 1.54), parent=chest)
+            upper_arm = add_bone(edit_bones, f"{side_name}UpperArm", shoulder.tail, (0.46 * side_sign, 0.0, 1.54), parent=shoulder, use_connect=True)
+            lower_arm = add_bone(edit_bones, f"{side_name}LowerArm", upper_arm.tail, (0.74 * side_sign, 0.0, 1.50), parent=upper_arm, use_connect=True)
+            hand = add_bone(edit_bones, f"{side_name}Hand", lower_arm.tail, (0.88 * side_sign, 0.0, 1.48), parent=lower_arm, use_connect=True)
+            add_finger_chains(hand, side_name[0], side_sign)
+
+        def add_leg(side_name: str, side_sign: float):
+            upper_leg = add_bone(edit_bones, f"{side_name}UpperLeg", (0.10 * side_sign, 0.0, 0.98), (0.10 * side_sign, 0.0, 0.58), parent=hips)
+            lower_leg = add_bone(edit_bones, f"{side_name}LowerLeg", upper_leg.tail, (0.10 * side_sign, 0.0, 0.16), parent=upper_leg, use_connect=True)
+            foot = add_bone(edit_bones, f"{side_name}Foot", lower_leg.tail, (0.10 * side_sign, -0.16, 0.05), parent=lower_leg, use_connect=True)
+            add_bone(edit_bones, f"{side_name}ToeBase", foot.tail, (0.10 * side_sign, -0.30, 0.05), parent=foot, use_connect=True)
+
+        add_arm_and_hand("Left", 1.0)
+        add_arm_and_hand("Right", -1.0)
+        add_leg("Left", 1.0)
+        add_leg("Right", -1.0)
+
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+        arm_obj.show_in_front = True
+        arm_data.display_type = "STICK"
+        arm_obj.location = (0.0, 0.0, 0.0)
+        arm_obj.rotation_euler = (0.0, 0.0, 0.0)
+        arm_obj.scale = (1.0, 1.0, 1.0)
+        tag_intermediate_rig(arm_obj)
+        scene.vmc_link_preview_armature = arm_obj
+        return arm_obj
+    except Exception:
+        if context.object and context.object.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        raise
+
+
+def collect_intermediate_status(scene):
+    arm_obj = getattr(scene, "vmc_link_preview_armature", None)
+    face_obj = getattr(scene, "vmc_link_preview_face_object", None)
+
+    arm_info = get_intermediate_rig_match_info(arm_obj) if arm_obj is not None else None
+    matched_arkit_keys = _count_matching_arkit_keys(face_obj) if face_obj is not None else 0
+
+    return {
+        "armature": arm_obj,
+        "armature_is_intermediate": is_vrm_intermediate_rig(arm_obj),
+        "armature_tagged": bool(arm_info and arm_info["is_tagged"]),
+        "required_present": len(arm_info["required_present"]) if arm_info else 0,
+        "required_total": len(constants.INTERMEDIATE_REQUIRED_BONES),
+        "optional_present": len(arm_info["optional_present"]) if arm_info else 0,
+        "optional_total": len(constants.INTERMEDIATE_OPTIONAL_BONES),
+        "required_missing": list(arm_info["required_missing"]) if arm_info else [],
+        "face_object": face_obj,
+        "face_object_is_preview": is_arkit_preview_face(face_obj),
+        "arkit_shape_matches": matched_arkit_keys,
+        "arkit_key_total": len(constants.ARKIT_BLENDSHAPE_KEYS),
+        "arkit_debug_asset_path": get_arkit_debug_asset_path(),
+        "arkit_debug_asset_exists": os.path.exists(get_arkit_debug_asset_path()),
+    }
+
+
+def import_arkit_preview_face(context):
+    scene = context.scene
+    existing_faces = _find_existing_arkit_preview_faces(scene)
+    if existing_faces:
+        face_obj = existing_faces[0]
+        tag_arkit_preview_face(face_obj)
+        scene.vmc_link_preview_face_object = face_obj
+        return face_obj
+
+    asset_path = get_arkit_debug_asset_path()
+    if not os.path.exists(asset_path):
+        raise RuntimeError(f"ARKit 调试资产不存在: {asset_path}")
+
+    before_objects = set(bpy.data.objects)
+    with bpy.data.libraries.load(asset_path, link=False) as (data_from, data_to):
+        data_to.objects = list(data_from.objects)
+
+    imported_objects = [obj for obj in data_to.objects if obj is not None and obj not in before_objects]
+    link_collection = context.collection or scene.collection
+    for obj in imported_objects:
+        if obj.name not in scene.objects:
+            try:
+                link_collection.objects.link(obj)
+            except RuntimeError:
+                pass
+
+    mesh_candidates = [obj for obj in imported_objects if getattr(obj, "type", None) == "MESH"]
+    if not mesh_candidates:
+        raise RuntimeError("ARKit 调试资产中未找到可用的面部模型")
+
+    face_obj = max(mesh_candidates, key=_count_matching_arkit_keys)
+    tag_arkit_preview_face(face_obj)
+    scene.vmc_link_preview_face_object = face_obj
+    return face_obj

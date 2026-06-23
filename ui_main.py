@@ -1,0 +1,53 @@
+import time
+
+from . import network, runtime
+
+
+def draw_main_panel(layout, context):
+    scene = context.scene
+
+    row = layout.row(align=True)
+    icon = "PAUSE" if network.is_running() else "PLAY"
+    label = "停止接收" if network.is_running() else "启动接收"
+    row.operator("vmc_link.toggle_receiver", text=label, icon=icon)
+
+    rec_row = layout.row(align=True)
+    rec_icon = "REC" if not runtime.is_recording() else "PAUSE"
+    rec_label = "开始录制" if not runtime.is_recording() else "停止录制"
+    rec_row.operator("vmc_link.toggle_recording", text=rec_label, icon=rec_icon)
+
+    if network.is_running():
+        last_pkt = runtime.get_latest_receiver_timestamp(scene)
+        if last_pkt == 0.0:
+            layout.label(text="等待连接", icon="TIME")
+        elif (time.time() - last_pkt) <= 2.0:
+            if getattr(scene, "vmc_link_live_preview", True):
+                layout.label(text="已连接", icon="CHECKMARK")
+            else:
+                layout.label(text="仅更新预览层", icon="INFO")
+        else:
+            layout.label(text="连接中断", icon="ERROR")
+
+    layout.separator()
+    layout.label(text="接收设置", icon="PREFERENCES")
+
+    col = layout.column(align=True)
+    col.prop(scene, "vmc_link_bind_mode")
+    if scene.vmc_link_bind_mode == "CUSTOM":
+        col.prop(scene, "vmc_link_bind_address_custom")
+    col.prop(scene, "vmc_link_port")
+    col.prop(scene, "vmc_link_face_source")
+    if runtime.is_arkit_face_source_enabled(scene):
+        col.prop(scene, "vmc_link_arkit_port")
+    col.prop(scene, "vmc_link_rate_hz")
+    col.prop(scene, "vmc_link_live_preview")
+
+    layout.separator()
+    layout.label(text="目标对象", icon="OUTLINER_OB_ARMATURE")
+
+    col = layout.column(align=True)
+    col.prop(scene, "vmc_link_armature")
+    col.prop(scene, "vmc_link_face_object")
+
+    row = layout.row(align=True)
+    row.operator("vmc_link.rebuild_maps", text="重建目标映射", icon="FILE_REFRESH")

@@ -24,11 +24,29 @@
 - 原始数据预览
 - 三套映射面板
 - 三套 JSON 映射预设
-- 测试用 Dummy Armature
+- 固定 `VRM Intermediate Rig`
+- `Intermediate Layers` 状态面板
 
-但当前代码仍高度集中在 [main.py](./main.py) 中，后续新增功能的维护成本会越来越高。
+并且已经完成当前阶段的两项基础整理：
 
-## 路线一：模块化改造
+- 路线一：模块化改造
+- 路线二：中间层固化
+
+当前代码不再集中在单一文件中，运行时逻辑已拆分为：
+
+- `constants.py`
+- `properties.py`
+- `network.py`
+- `runtime.py`
+- `mapping.py`
+- `presets.py`
+- `dummy_vrm.py`
+- `ui_main.py`
+- `ui_preview.py`
+- `ui_mapping.py`
+- `ui_intermediate.py`
+
+## 路线一：模块化改造（已完成当前阶段）
 
 ### 目标
 
@@ -79,7 +97,7 @@
 - 最后拆 UI 和注册
 - 每一步都保持功能可运行，不做一次性大重写
 
-## 路线二：固化 VRM 中间层
+## 路线二：固化 VRM 中间层（已完成当前阶段）
 
 ### 目标
 
@@ -125,6 +143,15 @@
   - ARKit 52 Key 中间层
   - 目标 Shape Key 标准
 - 为中间层增加更直接的调试状态显示
+
+### 当前已落地
+
+- `main.py` 已收敛为装配层
+- `Create Dummy Armature` 已升级为面板中的 `Create Intermediate Rig`
+- 新增中间层识别逻辑
+- 新增中间层重建逻辑
+- 新增 `Intermediate Layers` 面板
+- 新增骨骼覆盖率、缺失骨骼、ARKit 覆盖率状态显示
 
 ## 路线三：当前适配目标收敛
 
@@ -209,13 +236,13 @@
 
 ## 近期开发顺序建议
 
-### Phase 1：结构整理
+### Phase 1：结构整理（已完成）
 
 - 抽离常量、属性、网络、映射、UI
 - 保持现有功能不变
 - 为后续中间层重映射预留模块边界
 
-### Phase 2：中间层固化
+### Phase 2：中间层固化（已完成）
 
 - 固化 Dummy Armature 的骨架定义
 - 明确它是 `VRM Intermediate Rig`
@@ -267,12 +294,10 @@
 
 ## 当前结论
 
-项目已经跨过“能收数据、能预览、能基本驱动”的阶段。
+项目已经跨过“能收数据、能预览、能基本驱动”的阶段，并完成了路线一、路线二的基础工程收敛。
 
 下一步最重要的不是继续横向加来源，而是围绕：
 
-- 模块化
-- VRM 中间层
 - Auto Rig Pro 骨骼
 - MMD 面部
 - 可维护的重映射模块
