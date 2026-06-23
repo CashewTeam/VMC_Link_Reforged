@@ -1,3 +1,5 @@
+import threading
+
 from .constants import ARKIT_BLENDSHAPE_KEYS
 
 
@@ -6,6 +8,9 @@ dispatcher = None
 arkit_receiver_socket = None
 arkit_dispatcher = None
 apply_timer_running = False
+receiver_thread = None
+receiver_stop_event = None
+buffer_lock = threading.Lock()
 
 root_buf = None
 waist_buf = None
@@ -42,11 +47,12 @@ def reset_runtime_buffers():
     global cached_arkit_blend_map, preview_cached_bone_map, preview_cached_arkit_blend_map
     global preview_armature_ref, preview_face_ref
 
-    root_buf = None
-    waist_buf = None
-    bone_buf = {}
-    blend_buf = {}
-    arkit_blend_buf = {key: 0.0 for key in ARKIT_BLENDSHAPE_KEYS}
+    with buffer_lock:
+        root_buf = None
+        waist_buf = None
+        bone_buf = {}
+        blend_buf = {}
+        arkit_blend_buf = {key: 0.0 for key in ARKIT_BLENDSHAPE_KEYS}
     cached_arkit_blend_map = {}
     preview_cached_bone_map = {}
     preview_cached_arkit_blend_map = {}

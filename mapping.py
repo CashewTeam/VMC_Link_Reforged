@@ -4,6 +4,19 @@ from mathutils import Quaternion
 from . import constants, helpers, state
 
 
+def _build_canonical_bone_lookups():
+    lowered = {}
+    normalized = {}
+    for canonical_name, aliases in constants.BONE_ALIASES.items():
+        for candidate in (canonical_name, *aliases):
+            lowered.setdefault(str(candidate).lower(), canonical_name)
+            normalized.setdefault(helpers.normalize_bone_name(candidate), canonical_name)
+    return lowered, normalized
+
+
+_CANONICAL_BONE_BY_LOWER, _CANONICAL_BONE_BY_NORMALIZED = _build_canonical_bone_lookups()
+
+
 def has_pose_bones(obj) -> bool:
     return bool(obj and getattr(obj, "type", None) == "ARMATURE" and getattr(obj, "pose", None) is not None)
 
@@ -282,10 +295,15 @@ def get_vmc_bone_pose(raw_bones: dict, wanted: str):
 
 
 def canonicalize_vmc_bones(raw_bones: dict):
+    if not raw_bones:
+        return {}
+
     canonical = {}
-    for source_name in constants.BONE_ALIASES:
-        raw = get_vmc_bone_pose(raw_bones, source_name)
-        if raw is not None:
+    for raw_name, raw in raw_bones.items():
+        source_name = _CANONICAL_BONE_BY_LOWER.get(str(raw_name).lower())
+        if source_name is None:
+            source_name = _CANONICAL_BONE_BY_NORMALIZED.get(helpers.normalize_bone_name(raw_name))
+        if source_name is not None and source_name not in canonical:
             canonical[source_name] = raw
     return canonical
 

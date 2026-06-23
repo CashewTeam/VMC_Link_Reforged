@@ -1,4 +1,6 @@
+import select
 import socket
+import threading
 import time
 
 import bpy
@@ -53,6 +55,7 @@ def _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dis
     state.dispatcher = vmc_dispatcher
     state.arkit_receiver_socket = arkit_socket
     state.arkit_dispatcher = arkit_dispatcher
+    _start_receiver_thread()
 
     if not bpy.app.timers.is_registered(runtime.apply_timer):
         bpy.app.timers.register(runtime.apply_timer, persistent=True)
@@ -60,6 +63,7 @@ def _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dis
 
 
 def _close_receiver_handles():
+    _stop_receiver_thread()
     if state.receiver_socket is not None:
         state.receiver_socket.close()
     if state.arkit_receiver_socket is not None:
@@ -73,6 +77,54 @@ def _close_receiver_handles():
     if bpy.app.timers.is_registered(runtime.apply_timer):
         bpy.app.timers.unregister(runtime.apply_timer)
     state.apply_timer_running = False
+
+
+def _receiver_thread_loop(stop_event):
+    while not stop_event.is_set():
+        socket_pairs = [
+            (state.receiver_socket, state.dispatcher, "OSC"),
+            (state.arkit_receiver_socket, state.arkit_dispatcher, "ARKit OSC"),
+        ]
+        active_sockets = [sock for sock, dispatcher, _name in socket_pairs if sock is not None and dispatcher is not None]
+        if not active_sockets:
+            stop_event.wait(0.05)
+            continue
+
+        try:
+            readable, _writable, _errors = select.select(active_sockets, [], [], 0.05)
+        except (OSError, ValueError):
+            if not stop_event.is_set():
+                time.sleep(0.01)
+            continue
+
+        for sock, dispatcher, stream_name in socket_pairs:
+            if sock in readable:
+                poll_socket_packets(sock, dispatcher, stream_name)
+
+
+def _start_receiver_thread():
+    _stop_receiver_thread()
+    stop_event = threading.Event()
+    receiver_thread = threading.Thread(
+        target=_receiver_thread_loop,
+        args=(stop_event,),
+        name="VMC Link Receiver",
+        daemon=True,
+    )
+    state.receiver_stop_event = stop_event
+    state.receiver_thread = receiver_thread
+    receiver_thread.start()
+
+
+def _stop_receiver_thread():
+    stop_event = state.receiver_stop_event
+    receiver_thread = state.receiver_thread
+    if stop_event is not None:
+        stop_event.set()
+    if receiver_thread is not None and receiver_thread.is_alive() and receiver_thread is not threading.current_thread():
+        receiver_thread.join(timeout=0.2)
+    state.receiver_stop_event = None
+    state.receiver_thread = None
 
 
 def build_vmc_dispatcher():
@@ -104,12 +156,14 @@ def restart_server(scene):
 
     bind_host, new_socket, new_dispatcher, new_arkit_socket, new_arkit_dispatcher = _build_receiver_handles(scene)
 
+    _stop_receiver_thread()
     old_socket = state.receiver_socket
     old_arkit_socket = state.arkit_receiver_socket
     state.receiver_socket = new_socket
     state.dispatcher = new_dispatcher
     state.arkit_receiver_socket = new_arkit_socket
     state.arkit_dispatcher = new_arkit_dispatcher
+    _start_receiver_thread()
 
     state.reset_runtime_buffers()
     state.cached_bone_map = {}
@@ -159,9 +213,10 @@ def on_vmc_bone_pos(_address, *args):
     except (TypeError, ValueError):
         return
 
-    state.last_packet_ts = time.time()
-    state.bone_buf[bone_name] = (px, py, pz, qx, qy, qz, qw)
-    state.dirty = True
+    with state.buffer_lock:
+        state.last_packet_ts = time.time()
+        state.bone_buf[bone_name] = (px, py, pz, qx, qy, qz, qw)
+        state.dirty = True
 
 
 def on_vmc_root_pos(_address, *args):
@@ -175,9 +230,10 @@ def on_vmc_root_pos(_address, *args):
     except (TypeError, ValueError):
         return
 
-    state.last_packet_ts = time.time()
-    state.root_buf = (px, py, pz, qx, qy, qz, qw)
-    state.dirty = True
+    with state.buffer_lock:
+        state.last_packet_ts = time.time()
+        state.root_buf = (px, py, pz, qx, qy, qz, qw)
+        state.dirty = True
 
 
 def on_vmc_tra_pos(_address, *args):
@@ -192,9 +248,10 @@ def on_vmc_tra_pos(_address, *args):
     except (TypeError, ValueError):
         return
 
-    state.last_packet_ts = time.time()
-    state.waist_buf = (px, py, pz, qx, qy, qz, qw)
-    state.dirty = True
+    with state.buffer_lock:
+        state.last_packet_ts = time.time()
+        state.waist_buf = (px, py, pz, qx, qy, qz, qw)
+        state.dirty = True
 
 
 def on_vmc_blend_val(_address, *args):
@@ -205,27 +262,29 @@ def on_vmc_blend_val(_address, *args):
     except (TypeError, ValueError):
         return
 
-    state.last_packet_ts = time.time()
-    state.blend_buf[args[0]] = val
-    state.dirty = True
+    with state.buffer_lock:
+        state.last_packet_ts = time.time()
+        state.blend_buf[args[0]] = val
+        state.dirty = True
 
 
 def on_arkit_face(_address, *args):
     if not args:
         return
     count = min(len(args), len(constants.ARKIT_BLENDSHAPE_KEYS))
-    updated_any = False
-    for idx in range(count):
-        try:
-            val = float(args[idx])
-        except (TypeError, ValueError):
-            continue
-        state.arkit_blend_buf[constants.ARKIT_BLENDSHAPE_KEYS[idx]] = val
-        updated_any = True
+    with state.buffer_lock:
+        updated_any = False
+        for idx in range(count):
+            try:
+                val = float(args[idx])
+            except (TypeError, ValueError):
+                continue
+            state.arkit_blend_buf[constants.ARKIT_BLENDSHAPE_KEYS[idx]] = val
+            updated_any = True
 
-    if updated_any:
-        state.arkit_last_packet_ts = time.time()
-        state.dirty = True
+        if updated_any:
+            state.arkit_last_packet_ts = time.time()
+            state.dirty = True
 
 
 def start_server(scene):

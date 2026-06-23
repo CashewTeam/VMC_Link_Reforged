@@ -204,6 +204,7 @@ def _build_receiver_target_context(scene):
         "preview_start_matrices": {},
         "target_start_matrices": {},
         "arp_rotation_calibrations": {},
+        "arp_runtime_entries": (),
     }
 
     analysis = mapping_arp.analyze_armature(arm_obj)
@@ -228,6 +229,16 @@ def _build_receiver_target_context(scene):
         calibration = source_start_rotation.inverted() @ aligned_target_rotation
         calibration.normalize()
         context["arp_rotation_calibrations"][source_name] = calibration
+    context["arp_runtime_entries"] = tuple(
+        (
+            source_name,
+            target_name,
+            preview_arm.pose.bones.get(source_name),
+            arm_obj.pose.bones.get(target_name),
+            context["arp_rotation_calibrations"].get(source_name),
+        )
+        for source_name, target_name in runtime_map.items()
+    )
     return context
 
 
@@ -278,35 +289,83 @@ def _apply_target_root_motion(arm_obj, root, waist, context):
 
 
 def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
-    runtime_map = mapping_arp.build_runtime_mapping(scene, arm_obj)
     driven_bones = set()
+    source_pose_matrices = {}
+    desired_target_matrices = {}
+    entries_by_source = {
+        source_name: (target_name, source_bone, target_bone, calibration)
+        for source_name, target_name, source_bone, target_bone, calibration in context["arp_runtime_entries"]
+    }
 
     for source_group in mapping_arp.ARP_RUNTIME_SOURCE_GROUPS:
-        group_changed = False
         for source_name in source_group:
-            target_name = runtime_map.get(source_name)
-            if target_name is None:
+            entry = entries_by_source.get(source_name)
+            if entry is None:
                 continue
-            source_bone = preview_arm.pose.bones.get(source_name)
-            target_bone = arm_obj.pose.bones.get(target_name)
-            calibration = context["arp_rotation_calibrations"].get(source_name)
+            target_name, source_bone, target_bone, calibration = entry
             if source_bone is None or target_bone is None or calibration is None:
                 continue
 
-            desired_rotation = source_bone.matrix.to_quaternion() @ calibration
+            source_matrix = _calculate_pose_matrix(source_bone, source_pose_matrices)
+            desired_rotation = source_matrix.to_quaternion() @ calibration
             desired_rotation.normalize()
             current_matrix = target_bone.matrix.copy()
-            target_bone.matrix = Matrix.LocRotScale(
+            desired_matrix = Matrix.LocRotScale(
                 current_matrix.to_translation(),
                 desired_rotation,
                 current_matrix.to_scale(),
             )
+            parent_bone = target_bone.parent
+            if parent_bone is None:
+                basis_matrix = target_bone.bone.convert_local_to_pose(
+                    desired_matrix,
+                    target_bone.bone.matrix_local,
+                    invert=True,
+                )
+            else:
+                parent_matrix = desired_target_matrices.get(parent_bone.name, parent_bone.matrix)
+                basis_matrix = target_bone.bone.convert_local_to_pose(
+                    desired_matrix,
+                    target_bone.bone.matrix_local,
+                    parent_matrix=parent_matrix,
+                    parent_matrix_local=parent_bone.bone.matrix_local,
+                    invert=True,
+                )
+            desired_target_matrices[target_name] = desired_matrix
+
+            basis_rotation = basis_matrix.to_quaternion()
+            basis_rotation.normalize()
+            if not helpers.quat_changed(target_bone.matrix_basis.to_quaternion(), basis_rotation):
+                continue
+            if target_bone.rotation_mode == "QUATERNION":
+                target_bone.rotation_quaternion = basis_rotation
+            else:
+                target_bone.rotation_euler = basis_rotation.to_euler(target_bone.rotation_mode, target_bone.rotation_euler)
             driven_bones.add(target_name)
-            group_changed = True
-        if group_changed:
-            bpy.context.view_layer.update()
 
     return driven_bones
+
+
+def _calculate_pose_matrix(pose_bone, cache):
+    cached = cache.get(pose_bone.name)
+    if cached is not None:
+        return cached
+
+    parent_bone = pose_bone.parent
+    if parent_bone is None:
+        matrix = pose_bone.bone.convert_local_to_pose(
+            pose_bone.matrix_basis,
+            pose_bone.bone.matrix_local,
+        )
+    else:
+        matrix = pose_bone.bone.convert_local_to_pose(
+            pose_bone.matrix_basis,
+            pose_bone.bone.matrix_local,
+            parent_matrix=_calculate_pose_matrix(parent_bone, cache),
+            parent_matrix_local=parent_bone.bone.matrix_local,
+        )
+    cache[pose_bone.name] = matrix
+    return matrix
 
 
 def clear_receiver_session_state():
@@ -439,7 +498,7 @@ def _apply_preview_armature(preview_arm, root, waist, bones, blends):
     eye_left_driven_by_bone = False
     eye_right_driven_by_bone = False
 
-    for vmc_name, raw in mapping.canonicalize_vmc_bones(bones).items():
+    for vmc_name, raw in bones.items():
         actual = state.preview_cached_bone_map.get(vmc_name) or mapping.find_bone_name(preview_arm, vmc_name, None)
         if not actual or actual not in pose:
             continue
@@ -518,9 +577,6 @@ def apply_timer():
 
     state.next_tick_ts = now + rate
 
-    network.poll_osc_packets()
-    tag_view3d_ui_redraw()
-
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     preview_face = getattr(scene, "vmc_link_preview_face_object", None)
     arm = getattr(scene, "vmc_link_armature", None)
@@ -539,19 +595,20 @@ def apply_timer():
         tag_view3d_ui_redraw_if_due(now)
         return rate
 
-    root = state.root_buf
-    waist = state.waist_buf
-    bones = mapping.canonicalize_vmc_bones(state.bone_buf)
-    blends = dict(state.blend_buf)
-    arkit_blends = dict(state.arkit_blend_buf)
-    state.dirty = False
+    with state.buffer_lock:
+        root = state.root_buf
+        waist = state.waist_buf
+        bones = mapping.canonicalize_vmc_bones(state.bone_buf)
+        blends = dict(state.blend_buf)
+        arkit_blends = dict(state.arkit_blend_buf)
+        state.dirty = False
     _ensure_preview_cache_targets(preview_arm, preview_face)
 
     _apply_preview_armature(preview_arm, root, waist, bones, blends)
     if use_arkit_face:
         _apply_preview_face(preview_face, arkit_blends)
 
-    tag_view3d_ui_redraw_if_due(now, force=True)
+    tag_view3d_ui_redraw_if_due(now)
 
     if not live_preview:
         return rate
@@ -569,8 +626,6 @@ def apply_timer():
 
     if arm is not None:
         target_context = _ensure_receiver_target_context(scene, arm, preview_arm)
-        if target_context.get("is_arp"):
-            bpy.context.view_layer.update()
         _apply_target_root_motion(arm, root, waist, target_context)
 
         if target_context.get("is_arp") and mapping.has_pose_bones(preview_arm):
