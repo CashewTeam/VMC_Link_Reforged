@@ -26,7 +26,7 @@
 - 三套 JSON 映射预设
 - 测试用 Dummy Armature
 
-但当前代码仍高度集中在 [main.py](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/main.py) 中，后续新增功能的维护成本会越来越高。
+但当前代码仍高度集中在 [main.py](./main.py) 中，后续新增功能的维护成本会越来越高。
 
 ## 路线一：模块化改造
 
@@ -170,7 +170,7 @@
 
 参考目录：
 
-`C:\Users\Con11\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\auto_rig_pro_master`
+`'/Users/con11/Library/Application Support/Blender/5.1/extensions/user_default/auto_rig_pro_master'`
 
 ### 从 Auto Rig Pro 借鉴的不是“具体实现”，而是这些产品能力
 
@@ -220,7 +220,7 @@
 - 固化 Dummy Armature 的骨架定义
 - 明确它是 `VRM Intermediate Rig`
 - 固化 `ARKit 52 Key` 为固定脸部中间层
-- 固化 [Arkitface.blend](/C:/Users/Con11/AppData/Roaming/Blender%20Foundation/Blender/5.1/extensions/blender_org/vmc_link/assets/Arkitface.blend) 为 ARKit 面部调试基准模型
+- 固化 [Arkitface.blend](./assets/Arkitface.blend) 为 ARKit 面部调试基准模型
 - 增加识别与重建逻辑
 - 为中间层增加专门面板与状态显示
 
