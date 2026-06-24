@@ -212,6 +212,8 @@ def _build_receiver_target_context(scene):
         "root_baseline_location": None,
         "root_baseline_rotation": None,
         "is_arp": False,
+        "arp_traj_bone": None,
+        "arp_traj_start_location": None,
         "preview_start_matrices": {},
         "target_start_matrices": {},
         "preview_start_rotations": {},
@@ -225,11 +227,20 @@ def _build_receiver_target_context(scene):
     }
 
     analysis = mapping_arp.analyze_armature(arm_obj)
-    if not analysis["is_arp"] or not mapping.has_pose_bones(preview_arm):
+    if not analysis["is_arp"]:
+        return context
+
+    context["is_arp"] = True
+    if mapping.has_pose_bones(arm_obj):
+        traj_bone = arm_obj.pose.bones.get("c_traj")
+        if traj_bone is not None:
+            context["arp_traj_bone"] = traj_bone
+            context["arp_traj_start_location"] = traj_bone.location.copy()
+
+    if not mapping.has_pose_bones(preview_arm):
         return context
 
     runtime_map = mapping_arp.build_runtime_mapping(scene, arm_obj)
-    context["is_arp"] = True
     for source_name, target_name in runtime_map.items():
         source_bone = preview_arm.pose.bones.get(source_name)
         target_bone = arm_obj.pose.bones.get(target_name)
@@ -317,11 +328,17 @@ def _select_root_motion_pose(root, waist, bones, include_hips: bool):
 
 def _apply_target_root_motion(arm_obj, root, waist, bones, context, lock_to_center: bool):
     if arm_obj is None or context.get("target_start_world") is None:
-        return
+        return set()
+
+    if lock_to_center and context.get("is_arp"):
+        context["root_source"] = None
+        context["root_baseline_location"] = None
+        context["root_baseline_rotation"] = None
+        return _apply_arp_traj_root_motion(arm_obj, context, Vector((0.0, 0.0, 0.0)))
 
     source_name, raw = _select_root_motion_pose(root, waist, bones, include_hips=not lock_to_center)
     if raw is None:
-        return
+        return set()
 
     current_location, current_rotation = helpers.convert_vmc_pose(*raw)
     if context.get("root_source") != source_name:
@@ -340,6 +357,9 @@ def _apply_target_root_motion(arm_obj, root, waist, bones, context, lock_to_cent
     if lock_to_center:
         delta_location = Vector((0.0, 0.0, 0.0))
 
+    if context.get("is_arp"):
+        return _apply_arp_traj_root_motion(arm_obj, context, delta_location)
+
     start_location, start_rotation, start_scale = context["target_start_world"].decompose()
     desired_world = Matrix.LocRotScale(
         start_location + delta_location,
@@ -348,6 +368,22 @@ def _apply_target_root_motion(arm_obj, root, waist, bones, context, lock_to_cent
     )
     if arm_obj.matrix_world != desired_world:
         arm_obj.matrix_world = desired_world
+    return set()
+
+
+def _apply_arp_traj_root_motion(arm_obj, context, delta_location):
+    traj_bone = context.get("arp_traj_bone")
+    start_location = context.get("arp_traj_start_location")
+    if traj_bone is None or start_location is None:
+        return set()
+
+    local_delta = arm_obj.matrix_world.to_3x3().inverted() @ delta_location
+    desired_location = start_location + local_delta
+    if not helpers.vec_changed(traj_bone.location, desired_location):
+        return set()
+
+    traj_bone.location = desired_location
+    return {"c_traj"}
 
 
 def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
@@ -947,7 +983,7 @@ def apply_timer():
 
     if arm is not None:
         target_context = _ensure_receiver_target_context(scene, arm, preview_arm)
-        _apply_target_root_motion(arm, root, waist, bones, target_context, lock_to_center)
+        driven_bones.update(_apply_target_root_motion(arm, root, waist, bones, target_context, lock_to_center))
 
         if target_context.get("is_arp") and mapping.has_pose_bones(preview_arm):
             driven_bones.update(_apply_arp_target_armature(scene, arm, preview_arm, target_context))
