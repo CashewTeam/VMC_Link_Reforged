@@ -205,8 +205,24 @@ ARP_DELTA_ROTATION_SOURCE_BONES = frozenset(
 )
 
 
+ARP_LOCAL_BASIS_DELTA_SOURCE_BONES = frozenset(constants.INTERMEDIATE_OPTIONAL_BONES)
+ARP_REST_AXIS_REMAP_SOURCE_BONES = frozenset(
+    source_name
+    for source_name in constants.INTERMEDIATE_OPTIONAL_BONES
+    if source_name.startswith("Thumb")
+)
+
+
 def uses_delta_rotation(source_name: str) -> bool:
     return source_name in ARP_DELTA_ROTATION_SOURCE_BONES
+
+
+def uses_local_basis_delta(source_name: str) -> bool:
+    return source_name in ARP_LOCAL_BASIS_DELTA_SOURCE_BONES
+
+
+def uses_rest_axis_remap(source_name: str) -> bool:
+    return source_name in ARP_REST_AXIS_REMAP_SOURCE_BONES
 
 
 def _has_pose_bones(obj) -> bool:

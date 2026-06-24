@@ -209,6 +209,8 @@ def _build_receiver_target_context(scene):
         "target_start_matrices": {},
         "preview_start_rotations": {},
         "target_start_rotations": {},
+        "preview_start_basis_rotations": {},
+        "target_start_basis_rotations": {},
         "arp_rotation_calibrations": {},
         "arp_filtered_source_rotations": {},
         "arp_filtered_rotations": {},
@@ -234,6 +236,12 @@ def _build_receiver_target_context(scene):
         target_start_rotation.normalize()
         context["preview_start_rotations"][source_name] = source_start_rotation.copy()
         context["target_start_rotations"][target_name] = target_start_rotation.copy()
+        source_start_basis_rotation = source_bone.matrix_basis.to_quaternion()
+        target_start_basis_rotation = target_bone.matrix_basis.to_quaternion()
+        source_start_basis_rotation.normalize()
+        target_start_basis_rotation.normalize()
+        context["preview_start_basis_rotations"][source_name] = source_start_basis_rotation.copy()
+        context["target_start_basis_rotations"][target_name] = target_start_basis_rotation.copy()
         source_axis = source_start_rotation @ Vector((0.0, 1.0, 0.0))
         target_axis = target_start_rotation @ Vector((0.0, 1.0, 0.0))
         target_to_source_axis = target_axis.rotation_difference(source_axis)
@@ -319,6 +327,11 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
             if source_bone is None or target_bone is None or calibration is None:
                 continue
 
+            if mapping_arp.uses_local_basis_delta(source_name):
+                if _apply_arp_local_basis_delta(source_name, target_name, source_bone, target_bone, context):
+                    driven_bones.add(target_name)
+                continue
+
             source_matrix = _calculate_pose_matrix(source_bone, source_pose_matrices)
             source_rotation = source_matrix.to_quaternion()
             source_rotation.normalize()
@@ -398,6 +411,52 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
             driven_bones.add(target_name)
 
     return driven_bones
+
+
+def _apply_arp_local_basis_delta(source_name: str, target_name: str, source_bone, target_bone, context) -> bool:
+    source_start_rotation = context["preview_start_basis_rotations"].get(source_name)
+    target_start_rotation = context["target_start_basis_rotations"].get(target_name)
+    if source_start_rotation is None or target_start_rotation is None:
+        return False
+
+    source_rotation = source_bone.matrix_basis.to_quaternion()
+    source_rotation.normalize()
+    source_delta = source_rotation @ source_start_rotation.inverted()
+    source_delta.normalize()
+    if mapping_arp.uses_rest_axis_remap(source_name):
+        source_delta = _remap_local_delta_between_rest_axes(source_bone, target_bone, source_delta)
+
+    desired_rotation = source_delta @ target_start_rotation
+    desired_rotation.normalize()
+    desired_rotation = _filter_arp_basis_rotation(target_name, desired_rotation, context)
+
+    current_rotation = (
+        target_bone.rotation_quaternion.copy()
+        if target_bone.rotation_mode == "QUATERNION"
+        else target_bone.matrix_basis.to_quaternion()
+    )
+    current_rotation.normalize()
+    if not helpers.quat_changed(current_rotation, desired_rotation):
+        return False
+
+    if target_bone.rotation_mode == "QUATERNION":
+        target_bone.rotation_quaternion = desired_rotation
+    else:
+        target_bone.rotation_euler = desired_rotation.to_euler(target_bone.rotation_mode, target_bone.rotation_euler)
+    return True
+
+
+def _remap_local_delta_between_rest_axes(source_bone, target_bone, source_delta):
+    source_rest = source_bone.bone.matrix_local.to_quaternion()
+    target_rest = target_bone.bone.matrix_local.to_quaternion()
+    source_rest.normalize()
+    target_rest.normalize()
+
+    world_delta = source_rest @ source_delta @ source_rest.inverted()
+    world_delta.normalize()
+    target_delta = target_rest.inverted() @ world_delta @ target_rest
+    target_delta.normalize()
+    return target_delta
 
 
 def _quat_angle_degrees(a, b) -> float:
