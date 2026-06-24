@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "mapping_kind": "vmc_blend",
+  "entries": {
+    "A": "あ",
+    "I": "い",
+    "U": "う",
+    "E": "え",
+    "O": "お",
+    "CH": "ワ",
+    "SIL": "真面目",
+    "NN": "にやり",
+    "Fun": "笑い",
+    "Joy": "にこり",
+    "Sorrow": "悲し",
+    "Angry": "怒り",
+    "Sad": "困る",
+    "Surprise": "びぐり口",
+    "Blink": "まばたき",
+    "Blink_L": "ウィンク",
+    "Blink_R": "ウィンク右",
+    "LookUp": "上",
+    "LookDown": "下"
+  }
+}

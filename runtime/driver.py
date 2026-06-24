@@ -378,6 +378,7 @@ def _apply_arp_traj_root_motion(arm_obj, context, delta_location):
         return set()
 
     local_delta = arm_obj.matrix_world.to_3x3().inverted() @ delta_location
+    local_delta = Vector((-local_delta.x, -local_delta.y, local_delta.z))
     desired_location = start_location + local_delta
     if not helpers.vec_changed(traj_bone.location, desired_location):
         return set()

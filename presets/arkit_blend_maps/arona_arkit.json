@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "mapping_kind": "arkit_blend",
+  "entries": {
+    "browDownLeft": "下",
+    "browDownRight": "真面目",
+    "browInnerUp": "にこり",
+    "browOuterUpLeft": "上",
+    "browOuterUpRight": "上",
+    "eyeBlinkLeft": "ウィンク",
+    "eyeBlinkRight": "ウィンク右",
+    "eyeLookDownLeft": "下",
+    "eyeLookDownRight": "下",
+    "eyeLookUpLeft": "上",
+    "eyeLookUpRight": "上",
+    "jawOpen": "あ",
+    "mouthFunnel": "う",
+    "mouthPucker": "口角下げ",
+    "mouthShrugUpper": "い",
+    "mouthSmileLeft": "にやり",
+    "mouthSmileRight": "にやり"
+  }
+}
