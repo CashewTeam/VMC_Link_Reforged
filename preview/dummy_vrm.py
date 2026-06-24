@@ -1,7 +1,7 @@
 import os
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from ..core import constants, helpers
 
@@ -310,12 +310,222 @@ def _world_bone_length(arm_obj, pose_bone) -> float:
     return (tail - head).length
 
 
+def _world_rest_bone_point(arm_obj, bone_name: str, point: str):
+    data_bone = getattr(getattr(arm_obj, "data", None), "bones", {}).get(bone_name)
+    if data_bone is None:
+        return None
+    if point == "head":
+        return arm_obj.matrix_world @ data_bone.head_local
+    if point == "tail":
+        return arm_obj.matrix_world @ data_bone.tail_local
+    return None
+
+
+def _world_bone_point(arm_obj, pose_bone, point: str):
+    return arm_obj.matrix_world @ getattr(pose_bone, point)
+
+
+def _average_world_points(points):
+    if not points:
+        return None
+    total = Vector((0.0, 0.0, 0.0))
+    for point in points:
+        total += point
+    return total / len(points)
+
+
+def _mapped_world_bone_point(arm_obj, bone_map: dict, source_name: str, point: str):
+    bone_name = bone_map.get(source_name)
+    pose_bone = arm_obj.pose.bones.get(bone_name) if bone_name else None
+    if pose_bone is None:
+        return None
+    return _world_bone_point(arm_obj, pose_bone, point)
+
+
+def _average_mapped_world_bone_points(arm_obj, bone_map: dict, source_names, point: str):
+    points = []
+    for source_name in source_names:
+        mapped_point = _mapped_world_bone_point(arm_obj, bone_map, source_name, point)
+        if mapped_point is None:
+            return None
+        points.append(mapped_point)
+    return _average_world_points(points)
+
+
+def _pelvis_point(arm_obj, bone_map: dict):
+    return _average_mapped_world_bone_points(arm_obj, bone_map, ("LeftUpperLeg", "RightUpperLeg"), "head")
+
+
+def _shoulder_point(arm_obj, bone_map: dict):
+    return _average_mapped_world_bone_points(arm_obj, bone_map, ("LeftUpperArm", "RightUpperArm"), "head")
+
+
+def _pelvis_to_shoulder_height_metric(arm_obj, bone_map: dict):
+    if arm_obj is None or getattr(arm_obj, "pose", None) is None:
+        return None
+
+    pelvis_point = _pelvis_point(arm_obj, bone_map)
+    shoulder_point = _shoulder_point(arm_obj, bone_map)
+    if pelvis_point is None or shoulder_point is None:
+        return None
+
+    height = shoulder_point.z - pelvis_point.z
+    return abs(height) if abs(height) > 0.00001 else None
+
+
+def _align_preview_pelvis_to_target(preview_arm, target_arm, preview_map, runtime_map):
+    target_pelvis = _pelvis_point(target_arm, runtime_map)
+    preview_pelvis = _pelvis_point(preview_arm, preview_map)
+    if target_pelvis is None or preview_pelvis is None:
+        return False
+    preview_arm.location += target_pelvis - preview_pelvis
+    return True
+
+
+def _uniform_object_scale_to_shoulder_height(context, preview_arm, target_arm, runtime_map):
+    preview_map = {
+        "Hips": "Hips",
+        "LeftUpperArm": "LeftUpperArm",
+        "RightUpperArm": "RightUpperArm",
+        "LeftUpperLeg": "LeftUpperLeg",
+        "RightUpperLeg": "RightUpperLeg",
+    }
+    target_height = _pelvis_to_shoulder_height_metric(target_arm, runtime_map)
+    preview_height = _pelvis_to_shoulder_height_metric(preview_arm, preview_map)
+    if target_height is None or preview_height is None:
+        return None
+
+    ratio = target_height / preview_height
+    if ratio <= 0.00001:
+        return None
+
+    preview_arm.scale = (ratio, ratio, ratio)
+    context.view_layer.update()
+    if not _align_preview_pelvis_to_target(preview_arm, target_arm, preview_map, runtime_map):
+        return None
+    return ratio
+
+
+def _iter_descendants(edit_bone):
+    for child in edit_bone.children:
+        yield child
+        yield from _iter_descendants(child)
+
+
+def _set_bone_length_and_translate_descendants(edit_bone, desired_length: float):
+    direction = edit_bone.tail - edit_bone.head
+    if direction.length <= 0.00001:
+        return False
+
+    old_tail = edit_bone.tail.copy()
+    descendants = list(_iter_descendants(edit_bone))
+    descendant_positions = {
+        bone.name: (bone.head.copy(), bone.tail.copy())
+        for bone in descendants
+    }
+
+    new_tail = edit_bone.head + direction.normalized() * desired_length
+    delta = new_tail - old_tail
+    if delta.length <= 0.00001:
+        return False
+
+    edit_bone.tail = new_tail
+    for bone in descendants:
+        old_head, old_child_tail = descendant_positions[bone.name]
+        bone.head = old_head + delta
+        bone.tail = old_child_tail + delta
+    return True
+
+
+def _target_hand_length(target_arm, runtime_map, source_name: str):
+    side_suffix = "_L" if source_name == "LeftHand" else "_R"
+    hand_target = runtime_map.get(source_name)
+    hand_point = _world_rest_bone_point(target_arm, hand_target, "head") if hand_target else None
+    if hand_point is None:
+        return None
+
+    finger_points = []
+    for finger_name in ("IndexFinger1", "MiddleFinger1", "RingFinger1", "LittleFinger1"):
+        finger_target = runtime_map.get(f"{finger_name}{side_suffix}")
+        finger_point = _world_rest_bone_point(target_arm, finger_target, "head") if finger_target else None
+        if finger_point is None:
+            return None
+        finger_points.append(finger_point)
+
+    finger_base = _average_world_points(finger_points)
+    if finger_base is None:
+        return None
+    length = (finger_base - hand_point).length
+    return length if length > 0.00001 else None
+
+
+def _target_length_for_source(target_arm, runtime_map, source_name: str):
+    if source_name in ("LeftHand", "RightHand"):
+        return _target_hand_length(target_arm, runtime_map, source_name)
+
+    target_name = runtime_map.get(source_name)
+    target_bone = target_arm.pose.bones.get(target_name) if target_name else None
+    if target_bone is None:
+        return None
+    return _world_bone_length(target_arm, target_bone)
+
+
+def _apply_object_location_to_armature_data(context, arm_obj):
+    if arm_obj is None or getattr(arm_obj, "type", None) != "ARMATURE":
+        return False
+    if Vector(arm_obj.location).length <= 0.00001:
+        return False
+
+    if context.object and context.object.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    local_delta = arm_obj.matrix_world.to_3x3().inverted() @ arm_obj.matrix_world.translation
+    if local_delta.length <= 0.00001:
+        arm_obj.location = (0.0, 0.0, 0.0)
+        context.view_layer.update()
+        return False
+
+    arm_obj.data.transform(Matrix.Translation(local_delta))
+    bpy.ops.object.select_all(action="DESELECT")
+    context.view_layer.objects.active = arm_obj
+    arm_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    arm_obj.location = (0.0, 0.0, 0.0)
+    context.view_layer.update()
+    return True
+
+
+def _validate_calibrated_preview_position(preview_arm, target_arm, preview_map, runtime_map):
+    if Vector(preview_arm.location).length > 0.00001:
+        raise RuntimeError("校准后预览骨架对象位置未归零")
+
+    preview_pelvis = _pelvis_point(preview_arm, preview_map)
+    target_pelvis = _pelvis_point(target_arm, runtime_map)
+    if preview_pelvis is None or target_pelvis is None:
+        raise RuntimeError("无法验证预览骨架与目标骨架的骨盆位置")
+    if (preview_pelvis - target_pelvis).length > 0.0001:
+        raise RuntimeError("校准后预览骨架骨盆位置未对齐")
+
+
+LIMB_LENGTH_CALIBRATION_SOURCES = (
+    "LeftUpperArm",
+    "LeftLowerArm",
+    "LeftHand",
+    "RightUpperArm",
+    "RightLowerArm",
+    "RightHand",
+    "LeftUpperLeg",
+    "LeftLowerLeg",
+    "RightUpperLeg",
+    "RightLowerLeg",
+    *constants.INTERMEDIATE_OPTIONAL_BONES,
+)
+
+
 def calibrate_intermediate_rig_lengths(context):
     scene = context.scene
-    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     target_arm = getattr(scene, "vmc_link_armature", None)
-    if not is_vrm_intermediate_rig(preview_arm):
-        raise RuntimeError("请先创建 VRM 预览骨架")
     if target_arm is None or getattr(target_arm, "type", None) != "ARMATURE" or getattr(target_arm, "pose", None) is None:
         raise RuntimeError("请先绑定目标骨架")
 
@@ -332,6 +542,11 @@ def calibrate_intermediate_rig_lengths(context):
     if not runtime_map:
         raise RuntimeError("当前目标骨架没有可用于长度校准的 ARP 映射")
 
+    preview_arm = create_intermediate_rig(context, rebuild=True)
+    scale_ratio = _uniform_object_scale_to_shoulder_height(context, preview_arm, target_arm, runtime_map)
+    if scale_ratio is None:
+        raise RuntimeError("无法根据骨盆到肩部高度计算整体缩放")
+
     if context.object and context.object.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
 
@@ -343,7 +558,7 @@ def calibrate_intermediate_rig_lengths(context):
     edit_bones = preview_arm.data.edit_bones
     calibrated = []
     try:
-        for source_name in mapping_arp.ARP_RUNTIME_SOURCE_ORDER:
+        for source_name in LIMB_LENGTH_CALIBRATION_SOURCES:
             target_name = runtime_map.get(source_name)
             edit_bone = edit_bones.get(source_name)
             target_bone = target_arm.pose.bones.get(target_name) if target_name else None
@@ -357,34 +572,33 @@ def calibrate_intermediate_rig_lengths(context):
             world_unit_length = (preview_arm.matrix_world.to_3x3() @ local_unit).length
             if world_unit_length <= 0.00001:
                 continue
-            target_world_length = _world_bone_length(target_arm, target_bone)
+            target_world_length = _target_length_for_source(target_arm, runtime_map, source_name)
+            if target_world_length is None:
+                continue
             desired_local_length = max(0.002, target_world_length / world_unit_length)
-            edit_bone.tail = edit_bone.head + local_unit * desired_local_length
-            calibrated.append(source_name)
-        _align_intermediate_rig_anchor_bones(edit_bones)
+            if _set_bone_length_and_translate_descendants(edit_bone, desired_local_length):
+                calibrated.append(source_name)
     finally:
         bpy.ops.object.mode_set(mode="OBJECT")
 
+    context.view_layer.update()
+    preview_map = {
+        "Hips": "Hips",
+        "LeftUpperArm": "LeftUpperArm",
+        "RightUpperArm": "RightUpperArm",
+        "LeftUpperLeg": "LeftUpperLeg",
+        "RightUpperLeg": "RightUpperLeg",
+    }
+    if not _align_preview_pelvis_to_target(preview_arm, target_arm, preview_map, runtime_map):
+        raise RuntimeError("无法对齐预览骨架与目标骨架的骨盆位置")
+    _apply_object_location_to_armature_data(context, preview_arm)
+    _validate_calibrated_preview_position(preview_arm, target_arm, preview_map, runtime_map)
+
     tag_intermediate_rig(preview_arm)
-    return calibrated
-
-
-def _set_bone_head_preserve_length(edit_bone, new_head):
-    direction = edit_bone.tail - edit_bone.head
-    if direction.length <= 0.00001:
-        return
-    length = direction.length
-    edit_bone.head = new_head
-    edit_bone.tail = edit_bone.head + direction.normalized() * length
-
-
-def _align_intermediate_rig_anchor_bones(edit_bones):
-    upper_chest = edit_bones.get("UpperChest")
-    if upper_chest is not None:
-        for name in ("LeftShoulder", "RightShoulder"):
-            shoulder = edit_bones.get(name)
-            if shoulder is not None:
-                _set_bone_head_preserve_length(shoulder, upper_chest.tail.copy())
+    return {
+        "scale_ratio": scale_ratio,
+        "calibrated_bones": calibrated,
+    }
 
 
 def collect_intermediate_status(scene):
