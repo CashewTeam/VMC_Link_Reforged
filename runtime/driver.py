@@ -1,3 +1,4 @@
+import math
 import time
 
 import bpy
@@ -207,6 +208,8 @@ def _build_receiver_target_context(scene):
         "preview_start_matrices": {},
         "target_start_matrices": {},
         "arp_rotation_calibrations": {},
+        "arp_filtered_source_rotations": {},
+        "arp_filtered_rotations": {},
         "arp_runtime_entries": (),
     }
 
@@ -294,6 +297,7 @@ def _apply_target_root_motion(arm_obj, root, waist, context):
 def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
     driven_bones = set()
     source_pose_matrices = {}
+    target_pose_matrices = {}
     desired_target_matrices = {}
     entries_by_source = {
         source_name: (target_name, source_bone, target_bone, calibration)
@@ -310,15 +314,19 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
                 continue
 
             source_matrix = _calculate_pose_matrix(source_bone, source_pose_matrices)
-            desired_rotation = source_matrix.to_quaternion() @ calibration
+            source_rotation = source_matrix.to_quaternion()
+            source_rotation.normalize()
+            source_rotation = _filter_arp_source_rotation(source_name, source_rotation, context)
+            desired_rotation = source_rotation @ calibration
             desired_rotation.normalize()
-            current_matrix = target_bone.matrix.copy()
+            start_matrix = context["target_start_matrices"].get(target_name) or target_bone.matrix.copy()
             desired_matrix = Matrix.LocRotScale(
-                current_matrix.to_translation(),
+                start_matrix.to_translation(),
                 desired_rotation,
-                current_matrix.to_scale(),
+                start_matrix.to_scale(),
             )
             parent_bone = target_bone.parent
+            parent_matrix = None
             if parent_bone is None:
                 basis_matrix = target_bone.bone.convert_local_to_pose(
                     desired_matrix,
@@ -326,7 +334,7 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
                     invert=True,
                 )
             else:
-                parent_matrix = desired_target_matrices.get(parent_bone.name, parent_bone.matrix)
+                parent_matrix = _calculate_arp_target_pose_matrix(parent_bone, target_pose_matrices, desired_target_matrices, arm_obj)
                 basis_matrix = target_bone.bone.convert_local_to_pose(
                     desired_matrix,
                     target_bone.bone.matrix_local,
@@ -334,11 +342,39 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
                     parent_matrix_local=parent_bone.bone.matrix_local,
                     invert=True,
                 )
-            desired_target_matrices[target_name] = desired_matrix
 
             basis_rotation = basis_matrix.to_quaternion()
             basis_rotation.normalize()
-            if not helpers.quat_changed(target_bone.matrix_basis.to_quaternion(), basis_rotation):
+            basis_rotation = _filter_arp_basis_rotation(target_name, basis_rotation, context)
+            filtered_basis_matrix = Matrix.LocRotScale(
+                basis_matrix.to_translation(),
+                basis_rotation,
+                basis_matrix.to_scale(),
+            )
+            if parent_bone is None:
+                effective_matrix = target_bone.bone.convert_local_to_pose(
+                    filtered_basis_matrix,
+                    target_bone.bone.matrix_local,
+                )
+            else:
+                effective_matrix = target_bone.bone.convert_local_to_pose(
+                    filtered_basis_matrix,
+                    target_bone.bone.matrix_local,
+                    parent_matrix=parent_matrix,
+                    parent_matrix_local=parent_bone.bone.matrix_local,
+                )
+            desired_target_matrices[target_name] = _apply_arp_copy_location_matrix(
+                target_bone,
+                effective_matrix,
+                desired_target_matrices,
+                arm_obj,
+            )
+            current_rotation = (
+                target_bone.rotation_quaternion.copy()
+                if target_bone.rotation_mode == "QUATERNION"
+                else target_bone.matrix_basis.to_quaternion()
+            )
+            if not helpers.quat_changed(current_rotation, basis_rotation):
                 continue
             if target_bone.rotation_mode == "QUATERNION":
                 target_bone.rotation_quaternion = basis_rotation
@@ -347,6 +383,144 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
             driven_bones.add(target_name)
 
     return driven_bones
+
+
+def _quat_angle_degrees(a, b) -> float:
+    dot = max(-1.0, min(1.0, abs(a.dot(b))))
+    return 2.0 * math.degrees(math.acos(dot))
+
+
+def _filter_arp_basis_rotation(target_name: str, desired_rotation, context):
+    filtered_rotations = context.setdefault("arp_filtered_rotations", {})
+    return _filter_arp_rotation(filtered_rotations, target_name, desired_rotation)
+
+
+def _filter_arp_source_rotation(source_name: str, desired_rotation, context):
+    filtered_rotations = context.setdefault("arp_filtered_source_rotations", {})
+    return _filter_arp_rotation(filtered_rotations, source_name, desired_rotation)
+
+
+def _filter_arp_rotation(filtered_rotations, key: str, desired_rotation):
+    previous = filtered_rotations.get(key)
+    if previous is None:
+        filtered_rotations[key] = desired_rotation.copy()
+        return desired_rotation
+
+    angle = _quat_angle_degrees(previous, desired_rotation)
+    if angle <= constants.ARP_ROTATION_FILTER_DEADBAND_DEG:
+        return previous.copy()
+    if angle >= constants.ARP_ROTATION_FILTER_FAST_ANGLE_DEG:
+        filtered_rotations[key] = desired_rotation.copy()
+        return desired_rotation
+
+    t = angle / constants.ARP_ROTATION_FILTER_FAST_ANGLE_DEG
+    alpha = constants.ARP_ROTATION_FILTER_MIN_ALPHA + (1.0 - constants.ARP_ROTATION_FILTER_MIN_ALPHA) * t
+    filtered = previous.slerp(desired_rotation, alpha)
+    filtered.normalize()
+    filtered_rotations[key] = filtered.copy()
+    return filtered
+
+
+def _calculate_arp_target_pose_matrix(pose_bone, cache, desired_matrices, arm_obj):
+    cached = cache.get(pose_bone.name)
+    if cached is not None:
+        return cached
+
+    desired_matrix = desired_matrices.get(pose_bone.name)
+    if desired_matrix is not None:
+        cache[pose_bone.name] = desired_matrix
+        return desired_matrix
+
+    copied_matrix = _resolve_arp_copy_transforms_matrix(pose_bone, desired_matrices, arm_obj)
+    if copied_matrix is not None:
+        cache[pose_bone.name] = copied_matrix
+        return copied_matrix
+
+    child_of_matrix = _resolve_arp_child_of_matrix(pose_bone, desired_matrices, arm_obj)
+    if child_of_matrix is not None:
+        cache[pose_bone.name] = _apply_arp_copy_location_matrix(
+            pose_bone,
+            child_of_matrix,
+            desired_matrices,
+            arm_obj,
+        )
+        return cache[pose_bone.name]
+
+    parent_bone = pose_bone.parent
+    if parent_bone is None:
+        matrix = pose_bone.bone.convert_local_to_pose(
+            pose_bone.matrix_basis,
+            pose_bone.bone.matrix_local,
+        )
+    else:
+        matrix = pose_bone.bone.convert_local_to_pose(
+            pose_bone.matrix_basis,
+            pose_bone.bone.matrix_local,
+            parent_matrix=_calculate_arp_target_pose_matrix(parent_bone, cache, desired_matrices, arm_obj),
+            parent_matrix_local=parent_bone.bone.matrix_local,
+        )
+    cache[pose_bone.name] = _apply_arp_copy_location_matrix(pose_bone, matrix, desired_matrices, arm_obj)
+    return cache[pose_bone.name]
+
+
+def _resolve_arp_copy_transforms_matrix(pose_bone, desired_matrices, arm_obj):
+    for constraint in pose_bone.constraints:
+        if constraint.type != "COPY_TRANSFORMS" or constraint.mute or float(constraint.influence) <= 0.0:
+            continue
+        if getattr(constraint, "target", None) is not arm_obj:
+            continue
+        subtarget = str(getattr(constraint, "subtarget", "")).strip()
+        if not subtarget:
+            continue
+        desired_matrix = desired_matrices.get(subtarget)
+        if desired_matrix is not None:
+            return desired_matrix
+    return None
+
+
+def _resolve_arp_child_of_matrix(pose_bone, desired_matrices, arm_obj):
+    for constraint in pose_bone.constraints:
+        if constraint.type != "CHILD_OF" or constraint.mute or float(constraint.influence) <= 0.0:
+            continue
+        if getattr(constraint, "target", None) is not arm_obj:
+            continue
+        subtarget = str(getattr(constraint, "subtarget", "")).strip()
+        if not subtarget:
+            continue
+        desired_matrix = desired_matrices.get(subtarget)
+        if desired_matrix is not None and float(constraint.influence) >= 0.999:
+            return desired_matrix
+    return None
+
+
+def _apply_arp_copy_location_matrix(pose_bone, matrix, desired_matrices, arm_obj):
+    location = matrix.to_translation()
+    changed = False
+    for constraint in pose_bone.constraints:
+        if constraint.type != "COPY_LOCATION" or constraint.mute or float(constraint.influence) <= 0.0:
+            continue
+        if getattr(constraint, "target", None) is not arm_obj:
+            continue
+        subtarget = str(getattr(constraint, "subtarget", "")).strip()
+        if not subtarget:
+            continue
+        target_matrix = desired_matrices.get(subtarget)
+        if target_matrix is None:
+            continue
+        target_location = target_matrix.to_translation()
+        influence = max(0.0, min(1.0, float(constraint.influence)))
+        if bool(getattr(constraint, "use_x", True)):
+            location.x = location.x + (target_location.x - location.x) * influence
+            changed = True
+        if bool(getattr(constraint, "use_y", True)):
+            location.y = location.y + (target_location.y - location.y) * influence
+            changed = True
+        if bool(getattr(constraint, "use_z", True)):
+            location.z = location.z + (target_location.z - location.z) * influence
+            changed = True
+    if not changed:
+        return matrix
+    return Matrix.LocRotScale(location, matrix.to_quaternion(), matrix.to_scale())
 
 
 def _calculate_pose_matrix(pose_bone, cache):
@@ -595,8 +769,20 @@ def apply_timer():
     if preview_arm is None and preview_face is None and arm is None and face is None:
         return rate
     if not state.dirty:
+        state.frame_snapshot_deadline_ts = 0.0
         tag_view3d_ui_redraw_if_due(now)
         return rate
+
+    latest_packet_ts = max(state.last_packet_ts, state.arkit_last_packet_ts if use_arkit_face else 0.0)
+    quiet_remaining = constants.RECEIVER_FRAME_QUIET_WINDOW_SEC - (now - latest_packet_ts)
+    if latest_packet_ts > 0.0 and quiet_remaining > 0.0:
+        if state.frame_snapshot_deadline_ts == 0.0:
+            state.frame_snapshot_deadline_ts = now + constants.RECEIVER_FRAME_MAX_DEFER_SEC
+        if now < state.frame_snapshot_deadline_ts:
+            delay = min(rate, max(0.001, quiet_remaining))
+            state.next_tick_ts = now + delay
+            return delay
+    state.frame_snapshot_deadline_ts = 0.0
 
     with state.buffer_lock:
         root = state.root_buf

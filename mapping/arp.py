@@ -424,6 +424,21 @@ def enable_fk_mode(arm_obj):
             pose_bone["ik_fk_switch"] = 1.0
 
 
+def enable_runtime_quaternion_mode(scene, arm_obj):
+    if arm_obj is None or not analyze_armature(arm_obj)["is_arp"]:
+        return []
+
+    runtime_map = build_runtime_mapping(scene, arm_obj)
+    changed = []
+    for target_name in runtime_map.values():
+        pose_bone = arm_obj.pose.bones.get(target_name)
+        if pose_bone is None or pose_bone.rotation_mode == "QUATERNION":
+            continue
+        pose_bone.rotation_mode = "QUATERNION"
+        changed.append(target_name)
+    return changed
+
+
 def restore_session_state(arm_obj, session_state):
     if arm_obj is None or not session_state:
         return
@@ -445,6 +460,7 @@ def prepare_receiver_session(scene):
 
     apply_standard_scene_mapping(scene)
     enable_fk_mode(arm_obj)
+    enable_runtime_quaternion_mode(scene, arm_obj)
     return analysis
 
 

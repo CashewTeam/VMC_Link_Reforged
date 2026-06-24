@@ -31,6 +31,7 @@ last_packet_ts = 0.0
 arkit_last_packet_ts = 0.0
 next_tick_ts = 0.0
 next_ui_redraw_ts = 0.0
+frame_snapshot_deadline_ts = 0.0
 
 recording = False
 
@@ -43,7 +44,7 @@ receiver_target_context = {}
 
 def reset_runtime_buffers():
     global root_buf, waist_buf, bone_buf, blend_buf, arkit_blend_buf
-    global dirty, last_packet_ts, arkit_last_packet_ts, next_tick_ts, next_ui_redraw_ts
+    global dirty, last_packet_ts, arkit_last_packet_ts, next_tick_ts, next_ui_redraw_ts, frame_snapshot_deadline_ts
     global cached_arkit_blend_map, preview_cached_bone_map, preview_cached_arkit_blend_map
     global preview_armature_ref, preview_face_ref
 
@@ -63,6 +64,7 @@ def reset_runtime_buffers():
     arkit_last_packet_ts = 0.0
     next_tick_ts = 0.0
     next_ui_redraw_ts = 0.0
+    frame_snapshot_deadline_ts = 0.0
 
 
 def reset_receiver_session_state():
