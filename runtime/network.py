@@ -322,6 +322,7 @@ def pause_server():
     if is_paused():
         raise RuntimeError("接收器已暂停")
 
+    runtime.pause_recording_clock()
     _close_receiver_handles()
     state.receiver_paused = True
     helpers.debug("Receiver paused")
@@ -335,6 +336,7 @@ def resume_server(scene):
 
     bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
     _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
+    runtime.resume_recording_clock()
     state.receiver_paused = False
     state.next_tick_ts = 0.0
     helpers.debug(f"Receiver resumed on UDP {bind_host}:{int(scene.vmc_link_port)}")
@@ -344,6 +346,7 @@ def stop_server(_scene):
     if not is_session_active() and not is_running():
         return
 
+    runtime.stop_recording()
     _close_receiver_handles()
     state.reset_runtime_buffers()
     runtime.restore_receiver_start_state()

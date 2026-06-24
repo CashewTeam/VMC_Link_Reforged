@@ -242,12 +242,68 @@ class VMC_LINK_OT_toggle_recording(bpy.types.Operator):
     bl_idname = "vmc_link.toggle_recording"
     bl_label = "切换录制"
 
-    def execute(self, _context):
-        runtime.set_recording(not runtime.is_recording())
-        if runtime.is_recording():
-            self.report({"INFO"}, "开始录制")
+    def execute(self, context):
+        scene = context.scene
+        try:
+            if runtime.is_recording():
+                written_frames = runtime.stop_recording()
+                self.report({"INFO"}, f"停止录制：已写入 {written_frames} 帧")
+            else:
+                if not network.is_session_active():
+                    self.report({"ERROR"}, "请先启动接收器")
+                    return {"CANCELLED"}
+                runtime.start_recording(scene)
+                self.report(
+                    {"INFO"},
+                    f"开始录制：范围 {runtime.get_recording_start_frame(scene)} - {runtime.get_recording_end_frame(scene)}",
+                )
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_set_record_start_to_current_frame(bpy.types.Operator):
+    bl_idname = "vmc_link.set_record_start_to_current_frame"
+    bl_label = "当前帧设为开始"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.vmc_link_record_start_frame = int(scene.frame_current)
+        self.report({"INFO"}, f"已将录制开始帧设为 {scene.frame_current}")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_set_record_end_to_current_frame(bpy.types.Operator):
+    bl_idname = "vmc_link.set_record_end_to_current_frame"
+    bl_label = "当前帧设为结束"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.vmc_link_record_end_frame = int(scene.frame_current)
+        self.report({"INFO"}, f"已将录制结束帧设为 {scene.frame_current}")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_clear_recording_range_keys(bpy.types.Operator):
+    bl_idname = "vmc_link.clear_recording_range_keys"
+    bl_label = "清空范围内关键帧"
+
+    def execute(self, context):
+        try:
+            result = runtime.clear_recording_range_keys(context.scene)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        removed_total = int(result["armature_removed"]) + int(result["face_removed"])
+        if removed_total == 0:
+            self.report({"INFO"}, f"指定范围内没有可清除的录制关键帧：{result['frame_start']} - {result['frame_end']}")
         else:
-            self.report({"INFO"}, "停止录制")
+            self.report(
+                {"INFO"},
+                f"已清空范围 {result['frame_start']} - {result['frame_end']} 内的 {removed_total} 个录制关键帧",
+            )
         return {"FINISHED"}
 
 
@@ -267,4 +323,7 @@ CLASSES = (
     VMC_LINK_OT_autofill_arp_bone_map,
     VMC_LINK_OT_validate_arp_bone_map,
     VMC_LINK_OT_toggle_recording,
+    VMC_LINK_OT_set_record_start_to_current_frame,
+    VMC_LINK_OT_set_record_end_to_current_frame,
+    VMC_LINK_OT_clear_recording_range_keys,
 )

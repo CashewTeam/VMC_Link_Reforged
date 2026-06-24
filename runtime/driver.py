@@ -2,7 +2,7 @@ import math
 import time
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from ..core import constants, helpers, state
 from ..mapping import arp as mapping_arp
@@ -14,8 +14,203 @@ def is_recording() -> bool:
     return state.recording
 
 
-def set_recording(value: bool):
-    state.recording = bool(value)
+def get_recording_sample_count() -> int:
+    return int(state.recording_sample_count)
+
+
+def get_recording_start_frame(scene=None) -> int:
+    if state.recording and state.recording_start_frame is not None:
+        return int(state.recording_start_frame)
+    scene = scene or getattr(bpy.context, "scene", None)
+    return int(getattr(scene, "vmc_link_record_start_frame", 1)) if scene is not None else 1
+
+
+def get_recording_end_frame(scene=None) -> int:
+    if state.recording and state.recording_end_frame is not None:
+        return int(state.recording_end_frame)
+    scene = scene or getattr(bpy.context, "scene", None)
+    return int(getattr(scene, "vmc_link_record_end_frame", get_recording_start_frame(scene))) if scene is not None else 1
+
+
+def is_recording_transition_enabled(scene=None) -> bool:
+    if state.recording:
+        return bool(state.recording_transition_enabled)
+    scene = scene or getattr(bpy.context, "scene", None)
+    return bool(getattr(scene, "vmc_link_record_transition_enabled", True)) if scene is not None else True
+
+
+def get_recording_transition_frames(scene=None) -> int:
+    if state.recording:
+        return int(state.recording_transition_frames)
+    scene = scene or getattr(bpy.context, "scene", None)
+    return int(getattr(scene, "vmc_link_record_transition_frames", 24)) if scene is not None else 24
+
+
+def get_recording_range_error(scene) -> str:
+    if scene is None:
+        return "当前没有可用场景"
+    frame_start = int(getattr(scene, "vmc_link_record_start_frame", 1))
+    frame_end = int(getattr(scene, "vmc_link_record_end_frame", frame_start))
+    if frame_end < frame_start:
+        return "结束帧必须大于等于开始帧"
+    if bool(getattr(scene, "vmc_link_record_transition_enabled", True)) and int(getattr(scene, "vmc_link_record_transition_frames", 24)) < 1:
+        return "过渡帧数必须大于等于 1"
+    return ""
+
+
+def _current_recording_actions(scene):
+    arm_action = state.recording_armature_action if state.recording else None
+    face_action = state.recording_face_action if state.recording else None
+
+    arm_obj = getattr(scene, "vmc_link_armature", None) if scene is not None else None
+    if arm_action is None and mapping.has_pose_bones(arm_obj):
+        animation_data = getattr(arm_obj, "animation_data", None)
+        arm_action = getattr(animation_data, "action", None) if animation_data is not None else None
+
+    face_obj = getattr(scene, "vmc_link_face_object", None) if scene is not None else None
+    if face_action is None and mapping.has_shape_keys(face_obj):
+        shape_keys = face_obj.data.shape_keys
+        animation_data = getattr(shape_keys, "animation_data", None)
+        face_action = getattr(animation_data, "action", None) if animation_data is not None else None
+
+    return arm_action, face_action
+
+
+def get_recording_action_labels(scene):
+    arm_action, face_action = _current_recording_actions(scene)
+    arm_obj = getattr(scene, "vmc_link_armature", None) if scene is not None else None
+    face_obj = getattr(scene, "vmc_link_face_object", None) if scene is not None else None
+
+    if mapping.has_pose_bones(arm_obj):
+        arm_label = arm_action.name if arm_action is not None else "开始录制时自动创建"
+    else:
+        arm_label = "未绑定目标骨架"
+
+    if mapping.has_shape_keys(face_obj):
+        face_label = face_action.name if face_action is not None else "开始录制时自动创建"
+    else:
+        face_label = "未绑定目标面部"
+
+    return {"armature": arm_label, "face": face_label}
+
+
+def _validate_recording_config(scene):
+    error = get_recording_range_error(scene)
+    if error:
+        raise RuntimeError(error)
+
+    frame_start = int(getattr(scene, "vmc_link_record_start_frame", 1))
+    frame_end = int(getattr(scene, "vmc_link_record_end_frame", frame_start))
+    transition_enabled = bool(getattr(scene, "vmc_link_record_transition_enabled", True))
+    transition_frames = int(getattr(scene, "vmc_link_record_transition_frames", 24))
+    total_frames = max(1, frame_end - frame_start + 1)
+    if transition_enabled:
+        transition_frames = min(max(1, transition_frames), total_frames)
+    else:
+        transition_frames = 0
+
+    return {
+        "frame_start": frame_start,
+        "frame_end": frame_end,
+        "transition_enabled": transition_enabled and transition_frames > 0,
+        "transition_frames": transition_frames,
+    }
+
+
+def start_recording(scene):
+    if scene is None:
+        raise RuntimeError("无法开始录制：当前没有可用场景")
+    if state.recording:
+        return
+    if not bool(getattr(scene, "vmc_link_live_preview", True)):
+        raise RuntimeError("请先开启“实时驱动目标对象”，录制只记录目标层结果")
+
+    arm_obj = getattr(scene, "vmc_link_armature", None)
+    face_obj = getattr(scene, "vmc_link_face_object", None)
+    if not mapping.has_pose_bones(arm_obj) and not mapping.has_shape_keys(face_obj):
+        raise RuntimeError("请先绑定目标骨架或目标面部")
+
+    config = _validate_recording_config(scene)
+    target_context = _build_receiver_target_context(scene) if mapping.has_pose_bones(arm_obj) else None
+    record_bones = _recordable_target_bones(scene, arm_obj, target_context, set())
+    record_shapes = _recordable_target_shapes(scene, face_obj, is_arkit_face_source_enabled(scene), set())
+    transition_source_sample = _build_recording_sample(arm_obj, record_bones, face_obj, record_shapes, target_context)
+
+    _prepare_recording_target_actions(arm_obj, face_obj)
+    state.recording = True
+    state.recording_start_frame = int(config["frame_start"])
+    state.recording_end_frame = int(config["frame_end"])
+    state.recording_frame = state.recording_start_frame
+    state.recording_start_ts = time.perf_counter()
+    state.recording_pause_started_ts = 0.0
+    state.recording_paused_duration = 0.0
+    state.recording_last_written_frame = state.recording_start_frame - 1
+    state.recording_sample_count = 0
+    state.recording_tracks = {}
+    state.recording_last_sample = None
+    state.recording_transition_enabled = bool(config["transition_enabled"])
+    state.recording_transition_frames = int(config["transition_frames"])
+    state.recording_transition_pending = bool(config["transition_enabled"])
+    state.recording_transition_source_sample = transition_source_sample if config["transition_enabled"] else None
+    state.recording_armature_ref = arm_obj if mapping.has_pose_bones(arm_obj) else None
+    state.recording_face_ref = face_obj if mapping.has_shape_keys(face_obj) else None
+    state.dirty = True
+
+
+def stop_recording():
+    written_frames = int(state.recording_sample_count)
+    _bake_recording_tracks()
+    if state.recording_armature_ref is not None and state.recording_armature_action is not None:
+        arm = state.recording_armature_ref
+        if getattr(arm, "type", None) == "ARMATURE":
+            arm.animation_data_create()
+            _bind_recorded_action(arm.animation_data, state.recording_armature_action, arm)
+    if state.recording_face_ref is not None and state.recording_face_action is not None:
+        face = state.recording_face_ref
+        if mapping.has_shape_keys(face):
+            shape_keys = face.data.shape_keys
+            shape_keys.animation_data_create()
+            _bind_recorded_action(shape_keys.animation_data, state.recording_face_action, shape_keys)
+    state.recording = False
+    state.recording_frame = None
+    state.recording_start_frame = None
+    state.recording_start_ts = 0.0
+    state.recording_pause_started_ts = 0.0
+    state.recording_paused_duration = 0.0
+    state.recording_last_written_frame = None
+    state.recording_end_frame = None
+    state.recording_armature_ref = None
+    state.recording_face_ref = None
+    state.recording_armature_action = None
+    state.recording_face_action = None
+    state.recording_tracks = {}
+    state.recording_last_sample = None
+    state.recording_transition_enabled = False
+    state.recording_transition_frames = 0
+    state.recording_transition_pending = False
+    state.recording_transition_source_sample = None
+    state.recording_sample_count = 0
+    return written_frames
+
+
+def set_recording(value: bool, scene=None):
+    if value:
+        start_recording(scene or getattr(bpy.context, "scene", None))
+    else:
+        stop_recording()
+
+
+def pause_recording_clock():
+    if not state.recording or state.recording_pause_started_ts > 0.0:
+        return
+    state.recording_pause_started_ts = time.perf_counter()
+
+
+def resume_recording_clock():
+    if not state.recording or state.recording_pause_started_ts <= 0.0:
+        return
+    state.recording_paused_duration += time.perf_counter() - state.recording_pause_started_ts
+    state.recording_pause_started_ts = 0.0
 
 
 def get_face_source(scene) -> str:
@@ -748,49 +943,698 @@ def draw_preview_entries(layout, title: str, entries, empty_text: str):
         col.label(text=entry)
 
 
-def record_current_sample(scene, arm, driven_bones, face, driven_shapes):
-    recorded_any = False
+def _prepare_recording_target_actions(arm, face):
+    if mapping.has_pose_bones(arm):
+        arm.animation_data_create()
+        action = arm.animation_data.action
+        if action is None:
+            action = bpy.data.actions.new(f"{arm.name}_VMC_Link_Action")
+        action.use_fake_user = True
+        state.recording_armature_action = action
+        arm.animation_data.action = None
+
+    if mapping.has_shape_keys(face):
+        shape_keys = face.data.shape_keys
+        shape_keys.animation_data_create()
+        action = shape_keys.animation_data.action
+        if action is None:
+            action = bpy.data.actions.new(f"{face.name}_VMC_Link_ShapeKeys")
+        action.use_fake_user = True
+        state.recording_face_action = action
+        shape_keys.animation_data.action = None
+
+
+def _bind_recorded_action(animation_data, action, datablock=None):
+    animation_data.action = action
+    if action is None or not hasattr(animation_data, "action_slot") or not hasattr(action, "slots"):
+        return
+    try:
+        if animation_data.action_slot is not None:
+            return
+        if datablock is not None:
+            for slot in getattr(action, "slots", []):
+                if getattr(slot, "target_id_type", None) == getattr(datablock, "id_type", None):
+                    animation_data.action_slot = slot
+                    return
+        if len(action.slots) > 0:
+            animation_data.action_slot = action.slots[0]
+    except Exception as exc:
+        helpers.debug(f"Failed to bind recorded action slot: {exc}")
+
+
+def _find_or_create_datablock_fcurve(action, datablock, data_path: str, array_index: int, group: str = None):
+    if action is None or datablock is None or not hasattr(action, "slots"):
+        return None
+
+    target_id_type = getattr(datablock, "id_type", None)
+    slot = None
+    for item in action.slots:
+        if getattr(item, "target_id_type", None) == target_id_type:
+            slot = item
+            break
+    if slot is None:
+        slot = action.slots.new(target_id_type, datablock.name)
+
+    layer = action.layers[0] if len(action.layers) > 0 else action.layers.new("Layer")
+    strip = layer.strips[0] if len(layer.strips) > 0 else layer.strips.new(type="KEYFRAME")
+
+    channelbag = None
+    for item in strip.channelbags:
+        if getattr(item, "slot", None) == slot:
+            channelbag = item
+            break
+    if channelbag is None:
+        channelbag = strip.channelbags.new(slot)
+
+    fcurve = channelbag.fcurves.find(data_path, index=array_index)
+    if fcurve is None:
+        fcurve = channelbag.fcurves.new(data_path, index=array_index, group_name=group or "")
+    return fcurve
+
+
+def _find_or_create_action_fcurve(action, data_path: str, array_index: int, group: str = None, datablock=None):
+    if action is None:
+        return None
+    if datablock is None:
+        fcurve = action.fcurves.find(data_path, index=array_index)
+        if fcurve is None:
+            fcurve = action.fcurves.new(data_path, index=array_index, action_group=group)
+        return fcurve
+    return _find_or_create_datablock_fcurve(action, datablock, data_path, array_index, group)
+
+
+def _find_existing_datablock_fcurve(action, datablock, data_path: str, array_index: int):
+    if action is None or datablock is None or not hasattr(action, "slots"):
+        return None
+
+    target_id_type = getattr(datablock, "id_type", None)
+    for slot in getattr(action, "slots", []):
+        if getattr(slot, "target_id_type", None) != target_id_type:
+            continue
+        for layer in getattr(action, "layers", []):
+            for strip in getattr(layer, "strips", []):
+                for channelbag in getattr(strip, "channelbags", []):
+                    if getattr(channelbag, "slot", None) != slot:
+                        continue
+                    fcurve = channelbag.fcurves.find(data_path, index=array_index)
+                    if fcurve is not None:
+                        return fcurve
+    return None
+
+
+def _find_existing_action_fcurve(action, data_path: str, array_index: int, datablock=None):
+    if action is None:
+        return None
+    if datablock is None:
+        return action.fcurves.find(data_path, index=array_index)
+    return _find_existing_datablock_fcurve(action, datablock, data_path, array_index)
+
+
+def _recording_track_key(action, datablock, data_path: str, array_index: int):
+    action_key = action.as_pointer() if action is not None and hasattr(action, "as_pointer") else 0
+    datablock_key = datablock.as_pointer() if datablock is not None and hasattr(datablock, "as_pointer") else 0
+    return (action_key, datablock_key, data_path, int(array_index))
+
+
+def _cache_recording_key(action, data_path: str, array_index: int, frame: int, value: float, group: str = None, datablock=None):
+    if action is None:
+        return False
+    key = _recording_track_key(action, datablock, data_path, array_index)
+    track = state.recording_tracks.get(key)
+    if track is None:
+        track = {
+            "action": action,
+            "datablock": datablock,
+            "data_path": data_path,
+            "array_index": int(array_index),
+            "group": group,
+            "points": [],
+        }
+        state.recording_tracks[key] = track
+
+    points = track["points"]
+    frame_value = int(frame)
+    numeric_value = float(value)
+    if not points:
+        points.append((frame_value, numeric_value))
+        return True
+
+    last_frame, last_value = points[-1]
+    if frame_value == last_frame:
+        if last_value == numeric_value:
+            return False
+        points[-1] = (frame_value, numeric_value)
+        return True
+
+    points.append((frame_value, numeric_value))
+    return True
+
+
+def _clear_fcurve_frame_range(fcurve, frame_start: int, frame_end: int):
+    removed = 0
+    for keyframe in reversed(fcurve.keyframe_points):
+        frame = float(keyframe.co.x)
+        if frame_start <= frame <= frame_end:
+            fcurve.keyframe_points.remove(keyframe, fast=True)
+            removed += 1
+    return removed
+
+
+def _bake_recording_track(track):
+    points = track.get("points") or []
+    if not points:
+        return 0
+
+    fcurve = _find_or_create_action_fcurve(
+        track.get("action"),
+        track["data_path"],
+        track["array_index"],
+        track.get("group"),
+        track.get("datablock"),
+    )
+    if fcurve is None:
+        return 0
+
+    frame_start = min(frame for frame, _value in points)
+    frame_end = max(frame for frame, _value in points)
+    _clear_fcurve_frame_range(fcurve, frame_start, frame_end)
+    for frame, value in points:
+        keyframe = fcurve.keyframe_points.insert(float(frame), float(value), options={"FAST"})
+        if keyframe is not None:
+            keyframe.interpolation = "LINEAR"
+    fcurve.update()
+    return len(points)
+
+
+def _bake_recording_tracks():
+    for track in tuple(state.recording_tracks.values()):
+        _bake_recording_track(track)
+
+
+def _record_vector(action, data_path: str, values, frame: int, group: str = None, datablock=None):
+    recorded = False
+    for index, value in enumerate(values):
+        recorded = _cache_recording_key(action, data_path, index, frame, value, group, datablock) or recorded
+    return recorded
+
+
+def _as_float_tuple(values):
+    return tuple(float(value) for value in values)
+
+
+def _as_quaternion(values):
+    quat = values.copy() if isinstance(values, Quaternion) else Quaternion(values)
+    quat.normalize()
+    return quat
+
+
+def _lerp_tuple(start, end, factor: float):
+    return tuple(float(a) + ((float(b) - float(a)) * factor) for a, b in zip(start, end))
+
+
+def _slerp_quaternion_tuple(start, end, factor: float):
+    start_quat = _as_quaternion(start)
+    end_quat = _as_quaternion(end)
+    interpolated = start_quat.slerp(end_quat, factor)
+    interpolated.normalize()
+    return _as_float_tuple(interpolated)
+
+
+def _rotation_quaternion_from_object(item):
+    rotation_mode = str(getattr(item, "rotation_mode", "XYZ"))
+    if rotation_mode == "QUATERNION":
+        return _as_quaternion(item.rotation_quaternion)
+    if rotation_mode == "AXIS_ANGLE":
+        angle = float(item.rotation_axis_angle[0])
+        axis = Vector(item.rotation_axis_angle[1:4])
+        if axis.length_squared <= 1e-12:
+            return Quaternion()
+        return _as_quaternion(Quaternion(axis.normalized(), angle))
+    return _as_quaternion(item.rotation_euler.to_quaternion())
+
+
+def _record_rotation_quaternion(action, prefix: str, rotation_mode: str, rotation_quaternion, frame: int, group: str = None):
+    basis_quat = _as_quaternion(rotation_quaternion)
+    if rotation_mode == "QUATERNION":
+        return _record_vector(action, f"{prefix}rotation_quaternion", basis_quat, frame, group)
+    if rotation_mode == "AXIS_ANGLE":
+        axis, angle = basis_quat.to_axis_angle()
+        return _record_vector(action, f"{prefix}rotation_axis_angle", (angle, axis.x, axis.y, axis.z), frame, group)
+    return _record_vector(action, f"{prefix}rotation_euler", basis_quat.to_euler(rotation_mode), frame, group)
+
+
+def _rotation_data_path_specs(prefix: str, rotation_mode: str):
+    if rotation_mode == "QUATERNION":
+        return [(f"{prefix}rotation_quaternion", index) for index in range(4)]
+    if rotation_mode == "AXIS_ANGLE":
+        return [(f"{prefix}rotation_axis_angle", index) for index in range(4)]
+    return [(f"{prefix}rotation_euler", index) for index in range(3)]
+
+
+def _recording_object_rotation_mode(item) -> str:
+    snapshot = _receiver_armature_snapshot(item)
+    if snapshot is not None:
+        object_state = snapshot.get("object_state", {})
+        return str(object_state.get("rotation_mode", getattr(item, "rotation_mode", "XYZ")))
+    return str(getattr(item, "rotation_mode", "XYZ"))
+
+
+def _record_object_rotation(action, item, prefix: str, frame: int, group: str = None):
+    if item.rotation_mode == "QUATERNION":
+        return _record_vector(action, f"{prefix}rotation_quaternion", item.rotation_quaternion, frame, group)
+    elif item.rotation_mode == "AXIS_ANGLE":
+        return _record_vector(action, f"{prefix}rotation_axis_angle", item.rotation_axis_angle, frame, group)
+    else:
+        return _record_vector(action, f"{prefix}rotation_euler", item.rotation_euler, frame, group)
+
+
+def _receiver_armature_snapshot(arm):
+    if arm is None:
+        return None
+    for snapshot in state.receiver_armature_snapshots:
+        if snapshot.get("object") is arm:
+            return snapshot
+    return None
+
+
+def _recording_pose_bone_rotation_mode(arm, bone_name: str, pose_bone) -> str:
+    snapshot = _receiver_armature_snapshot(arm)
+    if snapshot is not None:
+        bone_snapshot = snapshot.get("pose_bones", {}).get(bone_name)
+        if bone_snapshot is not None:
+            return str(bone_snapshot.get("rotation_mode", pose_bone.rotation_mode))
+    return str(pose_bone.rotation_mode)
+
+
+def _record_pose_bone_rotation(action, arm, bone_name: str, pose_bone, prefix: str, frame: int, group: str = None):
+    rotation_mode = _recording_pose_bone_rotation_mode(arm, bone_name, pose_bone)
+    basis_quat = pose_bone.matrix_basis.to_quaternion()
+    basis_quat.normalize()
+    return _record_rotation_quaternion(action, prefix, rotation_mode, basis_quat, frame, group)
+
+
+def _record_arp_fk_switches(action, arm, frame: int):
+    if action is None or not mapping.has_pose_bones(arm):
+        return False
+
+    recorded = False
+    for bone_name in mapping_arp.ARP_IK_FK_CONTROLS:
+        pose_bone = arm.pose.bones.get(bone_name)
+        if pose_bone is None or "ik_fk_switch" not in pose_bone:
+            continue
+
+        data_path = f'pose.bones["{bone_name}"]["ik_fk_switch"]'
+        recorded = _cache_recording_key(action, data_path, 0, frame, 1.0, bone_name) or recorded
+    return recorded
+
+
+def _recordable_target_bones(scene, arm, context, driven_bones):
+    if not mapping.has_pose_bones(arm):
+        return set()
+
+    pose = arm.pose.bones
+    bone_names = {name for name in driven_bones if name in pose}
+    if context and context.get("is_arp"):
+        for _source_name, target_name, _source_bone, target_bone, _calibration in context.get("arp_runtime_entries", ()):
+            if target_bone is not None and target_name in pose:
+                bone_names.add(target_name)
+        if context.get("arp_traj_bone") is not None and "c_traj" in pose:
+            bone_names.add("c_traj")
+        return bone_names
+
+    for vmc_name in constants.BONE_ALIASES:
+        actual = state.cached_bone_map.get(vmc_name) or mapping.find_bone_name(arm, vmc_name, scene)
+        if actual and actual in pose:
+            state.cached_bone_map[vmc_name] = actual
+            bone_names.add(actual)
+    return bone_names
+
+
+def _recordable_target_shapes(scene, face, use_arkit_face, driven_shapes):
+    if not mapping.has_shape_keys(face):
+        return set()
+
+    blocks = face.data.shape_keys.key_blocks
+    shape_names = {name for name in driven_shapes if name in blocks}
+    kind = constants.MAPPING_KIND_ARKIT_BLEND if use_arkit_face else constants.MAPPING_KIND_VMC_BLEND
+    cache = state.cached_arkit_blend_map if use_arkit_face else state.cached_blend_map
+    finder = mapping.find_arkit_shapekey_name if use_arkit_face else mapping.find_shapekey_name
+
+    for source_name in mapping.mapping_keys(kind):
+        actual = cache.get(source_name) or finder(face, source_name, scene)
+        if actual and actual in blocks:
+            cache[source_name] = actual
+            shape_names.add(actual)
+    return shape_names
+
+
+def _collect_recording_channel_specs(scene):
+    specs = {"armature": [], "face": []}
+    arm_obj = getattr(scene, "vmc_link_armature", None)
+    face_obj = getattr(scene, "vmc_link_face_object", None)
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    use_arkit_face = is_arkit_face_source_enabled(scene)
+    target_context = _ensure_receiver_target_context(scene, arm_obj, preview_arm) if mapping.has_pose_bones(arm_obj) else None
+
+    if mapping.has_pose_bones(arm_obj):
+        rotation_mode = _recording_object_rotation_mode(arm_obj)
+        specs["armature"].extend(
+            [{"data_path": "location", "array_index": index, "datablock": None} for index in range(3)]
+        )
+        specs["armature"].extend(
+            {"data_path": data_path, "array_index": array_index, "datablock": None}
+            for data_path, array_index in _rotation_data_path_specs("", rotation_mode)
+        )
+
+        record_bones = _recordable_target_bones(scene, arm_obj, target_context, set())
+        for bone_name in sorted(record_bones):
+            pose_bone = arm_obj.pose.bones.get(bone_name)
+            if pose_bone is None:
+                continue
+            prefix = f'pose.bones["{bone_name}"].'
+            specs["armature"].extend(
+                {"data_path": f"{prefix}location", "array_index": index, "datablock": None}
+                for index in range(3)
+            )
+            bone_rotation_mode = _recording_pose_bone_rotation_mode(arm_obj, bone_name, pose_bone)
+            specs["armature"].extend(
+                {"data_path": data_path, "array_index": array_index, "datablock": None}
+                for data_path, array_index in _rotation_data_path_specs(prefix, bone_rotation_mode)
+            )
+
+        if target_context and target_context.get("is_arp"):
+            for bone_name in mapping_arp.ARP_IK_FK_CONTROLS:
+                pose_bone = arm_obj.pose.bones.get(bone_name)
+                if pose_bone is None or "ik_fk_switch" not in pose_bone:
+                    continue
+                specs["armature"].append(
+                    {
+                        "data_path": f'pose.bones["{bone_name}"]["ik_fk_switch"]',
+                        "array_index": 0,
+                        "datablock": None,
+                    }
+                )
+
+    if mapping.has_shape_keys(face_obj):
+        shape_datablock = face_obj.data.shape_keys
+        record_shapes = _recordable_target_shapes(scene, face_obj, use_arkit_face, set())
+        for key_name in sorted(record_shapes):
+            specs["face"].append(
+                {
+                    "data_path": f'key_blocks["{key_name}"].value',
+                    "array_index": 0,
+                    "datablock": shape_datablock,
+                }
+            )
+
+    return specs
+
+
+def clear_recording_range_keys(scene):
+    if scene is None:
+        raise RuntimeError("当前没有可用场景")
+    if state.recording:
+        raise RuntimeError("请先停止录制")
+
+    error = get_recording_range_error(scene)
+    if error:
+        raise RuntimeError(error)
+
+    frame_start = int(getattr(scene, "vmc_link_record_start_frame", 1))
+    frame_end = int(getattr(scene, "vmc_link_record_end_frame", frame_start))
+    specs = _collect_recording_channel_specs(scene)
+    arm_action, face_action = _current_recording_actions(scene)
+
+    result = {
+        "frame_start": frame_start,
+        "frame_end": frame_end,
+        "armature_removed": 0,
+        "face_removed": 0,
+        "armature_action": arm_action.name if arm_action is not None else "",
+        "face_action": face_action.name if face_action is not None else "",
+    }
+
+    if arm_action is not None:
+        updated = []
+        for spec in specs["armature"]:
+            fcurve = _find_existing_action_fcurve(arm_action, spec["data_path"], spec["array_index"], spec["datablock"])
+            if fcurve is None:
+                continue
+            removed = _clear_fcurve_frame_range(fcurve, frame_start, frame_end)
+            if removed > 0:
+                result["armature_removed"] += removed
+                if fcurve not in updated:
+                    updated.append(fcurve)
+        for fcurve in updated:
+            fcurve.update()
+
+    if face_action is not None:
+        updated = []
+        for spec in specs["face"]:
+            fcurve = _find_existing_action_fcurve(face_action, spec["data_path"], spec["array_index"], spec["datablock"])
+            if fcurve is None:
+                continue
+            removed = _clear_fcurve_frame_range(fcurve, frame_start, frame_end)
+            if removed > 0:
+                result["face_removed"] += removed
+                if fcurve not in updated:
+                    updated.append(fcurve)
+        for fcurve in updated:
+            fcurve.update()
+
+    return result
+
+
+def _current_recording_frame(scene):
+    if state.recording_start_frame is None:
+        state.recording_start_frame = int(scene.frame_current)
+    if state.recording_start_ts <= 0.0:
+        state.recording_start_ts = time.perf_counter()
+
+    fps_base = float(getattr(scene.render, "fps_base", 1.0) or 1.0)
+    fps = float(getattr(scene.render, "fps", 24)) / fps_base
+    paused_duration = float(state.recording_paused_duration)
+    if state.recording_pause_started_ts > 0.0:
+        paused_duration += time.perf_counter() - state.recording_pause_started_ts
+
+    elapsed = max(0.0, time.perf_counter() - state.recording_start_ts - paused_duration)
+    frame = int(state.recording_start_frame + round(elapsed * fps))
+    state.recording_frame = frame
+    return frame
+
+
+def _build_recording_sample(arm, record_bones, face, record_shapes, target_context=None):
+    sample = {
+        "arm": None,
+        "bones": {},
+        "shape_datablock": None,
+        "shapes": {},
+        "ik_fk_switches": {},
+    }
 
     if arm is not None:
-        try:
-            arm.keyframe_insert(data_path="location")
-            if arm.rotation_mode == "QUATERNION":
-                arm.keyframe_insert(data_path="rotation_quaternion")
-            else:
-                arm.keyframe_insert(data_path="rotation_euler")
-            recorded_any = True
-        except Exception as exc:
-            helpers.debug(f"Failed to keyframe armature root: {exc}")
+        sample["arm"] = {
+            "location": _as_float_tuple(arm.location),
+            "rotation_mode": str(arm.rotation_mode),
+            "rotation_quaternion": _as_float_tuple(_rotation_quaternion_from_object(arm)),
+        }
+
+        if target_context and target_context.get("is_arp") and mapping.has_pose_bones(arm):
+            for bone_name in mapping_arp.ARP_IK_FK_CONTROLS:
+                pose_bone = arm.pose.bones.get(bone_name)
+                if pose_bone is None or "ik_fk_switch" not in pose_bone:
+                    continue
+                sample["ik_fk_switches"][bone_name] = float(pose_bone["ik_fk_switch"])
 
         pose = arm.pose.bones if getattr(arm, "pose", None) is not None else None
         if pose is not None:
-            for bone_name in driven_bones:
+            for bone_name in record_bones:
                 pose_bone = pose.get(bone_name)
                 if pose_bone is None:
                     continue
-                try:
-                    if pose_bone.rotation_mode == "QUATERNION":
-                        pose_bone.keyframe_insert(data_path="rotation_quaternion")
-                    else:
-                        pose_bone.keyframe_insert(data_path="rotation_euler")
-                    recorded_any = True
-                except Exception as exc:
-                    helpers.debug(f"Failed to keyframe bone '{bone_name}': {exc}")
+                basis_quat = pose_bone.matrix_basis.to_quaternion()
+                basis_quat.normalize()
+                sample["bones"][bone_name] = {
+                    "location": _as_float_tuple(pose_bone.location),
+                    "rotation_mode": _recording_pose_bone_rotation_mode(arm, bone_name, pose_bone),
+                    "rotation_quaternion": _as_float_tuple(basis_quat),
+                }
 
     if mapping.has_shape_keys(face):
+        sample["shape_datablock"] = face.data.shape_keys
         blocks = face.data.shape_keys.key_blocks
-        for key_name in driven_shapes:
+        for key_name in record_shapes:
             key_block = blocks.get(key_name)
             if key_block is None:
                 continue
-            try:
-                key_block.keyframe_insert(data_path="value")
-                recorded_any = True
-            except Exception as exc:
-                helpers.debug(f"Failed to keyframe shape key '{key_name}': {exc}")
+            sample["shapes"][key_name] = float(key_block.value)
 
-    if recorded_any and not bpy.context.screen.is_animation_playing:
-        scene.frame_set(scene.frame_current + 1)
+    return sample
+
+
+def _interpolate_recording_sample(previous_sample, current_sample, factor: float):
+    if previous_sample is None or factor >= 1.0:
+        return current_sample
+    if factor <= 0.0:
+        return previous_sample
+
+    sample = {
+        "arm": None,
+        "bones": {},
+        "shape_datablock": current_sample.get("shape_datablock") or previous_sample.get("shape_datablock"),
+        "shapes": {},
+        "ik_fk_switches": dict(current_sample.get("ik_fk_switches", {})),
+    }
+
+    prev_arm = previous_sample.get("arm")
+    curr_arm = current_sample.get("arm")
+    if prev_arm is not None and curr_arm is not None:
+        sample["arm"] = {
+            "location": _lerp_tuple(prev_arm["location"], curr_arm["location"], factor),
+            "rotation_mode": curr_arm["rotation_mode"],
+            "rotation_quaternion": _slerp_quaternion_tuple(prev_arm["rotation_quaternion"], curr_arm["rotation_quaternion"], factor),
+        }
+    else:
+        sample["arm"] = curr_arm or prev_arm
+
+    bone_names = set(previous_sample.get("bones", {}).keys()) | set(current_sample.get("bones", {}).keys())
+    for bone_name in bone_names:
+        prev_bone = previous_sample.get("bones", {}).get(bone_name)
+        curr_bone = current_sample.get("bones", {}).get(bone_name)
+        if prev_bone is not None and curr_bone is not None:
+            sample["bones"][bone_name] = {
+                "location": _lerp_tuple(prev_bone["location"], curr_bone["location"], factor),
+                "rotation_mode": curr_bone["rotation_mode"],
+                "rotation_quaternion": _slerp_quaternion_tuple(prev_bone["rotation_quaternion"], curr_bone["rotation_quaternion"], factor),
+            }
+        else:
+            sample["bones"][bone_name] = curr_bone or prev_bone
+
+    shape_names = set(previous_sample.get("shapes", {}).keys()) | set(current_sample.get("shapes", {}).keys())
+    for shape_name in shape_names:
+        prev_value = previous_sample.get("shapes", {}).get(shape_name)
+        curr_value = current_sample.get("shapes", {}).get(shape_name)
+        if prev_value is not None and curr_value is not None:
+            sample["shapes"][shape_name] = float(prev_value) + ((float(curr_value) - float(prev_value)) * factor)
+        elif curr_value is not None:
+            sample["shapes"][shape_name] = float(curr_value)
+        elif prev_value is not None:
+            sample["shapes"][shape_name] = float(prev_value)
+
+    return sample
+
+
+def _cache_recording_sample(sample, frame: int):
+    recorded_any = False
+
+    arm_sample = sample.get("arm")
+    if arm_sample is not None:
+        action = state.recording_armature_action
+        recorded_any = _record_vector(action, "location", arm_sample["location"], frame, "Object") or recorded_any
+        recorded_any = _record_rotation_quaternion(
+            action,
+            "",
+            arm_sample["rotation_mode"],
+            arm_sample["rotation_quaternion"],
+            frame,
+            "Object",
+        ) or recorded_any
+
+        for bone_name, switch_value in sample.get("ik_fk_switches", {}).items():
+            data_path = f'pose.bones["{bone_name}"]["ik_fk_switch"]'
+            recorded_any = _cache_recording_key(action, data_path, 0, frame, switch_value, bone_name) or recorded_any
+
+        for bone_name, bone_sample in sample.get("bones", {}).items():
+            prefix = f'pose.bones["{bone_name}"].'
+            recorded_any = _record_vector(action, f"{prefix}location", bone_sample["location"], frame, bone_name) or recorded_any
+            recorded_any = _record_rotation_quaternion(
+                action,
+                prefix,
+                bone_sample["rotation_mode"],
+                bone_sample["rotation_quaternion"],
+                frame,
+                bone_name,
+            ) or recorded_any
+
+    shape_datablock = sample.get("shape_datablock")
+    if shape_datablock is not None:
+        action = state.recording_face_action
+        for key_name, shape_value in sample.get("shapes", {}).items():
+            data_path = f'key_blocks["{key_name}"].value'
+            recorded_any = _cache_recording_key(action, data_path, 0, frame, shape_value, key_name, shape_datablock) or recorded_any
+
+    return recorded_any
+
+
+def _write_transition_frames(current_sample):
+    source_sample = state.recording_transition_source_sample or current_sample
+    frame_start = int(state.recording_start_frame)
+    frame_end = int(state.recording_end_frame if state.recording_end_frame is not None else frame_start)
+    transition_last_frame = min(frame_end, frame_start + max(0, int(state.recording_transition_frames) - 1))
+    span = max(1, transition_last_frame - frame_start)
+
+    for frame in range(frame_start, transition_last_frame + 1):
+        factor = 0.0 if transition_last_frame == frame_start else (frame - frame_start) / float(span)
+        transition_sample = _interpolate_recording_sample(source_sample, current_sample, factor)
+        _cache_recording_sample(transition_sample, frame)
+
+    state.recording_last_sample = current_sample
+    state.recording_last_written_frame = transition_last_frame
+    state.recording_sample_count = max(0, transition_last_frame - frame_start + 1)
+    state.recording_transition_pending = False
+    state.recording_transition_source_sample = None
+    return transition_last_frame
+
+
+def record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_context=None, use_arkit_face=False, has_valid_input=False):
+    current_frame = _current_recording_frame(scene)
+    frame_end = int(state.recording_end_frame if state.recording_end_frame is not None else current_frame)
+    if state.recording_start_frame is not None and frame_end < state.recording_start_frame:
+        stop_recording()
+        return
+
+    effective_frame = min(current_frame, frame_end)
+    last_frame = state.recording_last_written_frame
+
+    record_bones = _recordable_target_bones(scene, arm, target_context, driven_bones)
+    record_shapes = _recordable_target_shapes(scene, face, use_arkit_face, driven_shapes)
+    current_sample = _build_recording_sample(arm, record_bones, face, record_shapes, target_context)
+
+    if state.recording_transition_pending:
+        if not has_valid_input:
+            if current_frame >= frame_end:
+                stop_recording()
+            return
+        _write_transition_frames(current_sample)
+        last_frame = state.recording_last_written_frame
+
+    if not has_valid_input and state.recording_last_sample is None:
+        if current_frame >= frame_end:
+            stop_recording()
+        return
+
+    previous_sample = state.recording_last_sample if state.recording_last_sample is not None else current_sample
+    recorded_any = False
+
+    if last_frame is not None and previous_sample is not None and effective_frame > last_frame + 1:
+        frame_span = float(effective_frame - last_frame)
+        for frame in range(last_frame + 1, effective_frame):
+            factor = (frame - last_frame) / frame_span
+            interpolated_sample = _interpolate_recording_sample(previous_sample, current_sample, factor)
+            recorded_any = _cache_recording_sample(interpolated_sample, frame) or recorded_any
+
+    if effective_frame >= (last_frame if last_frame is not None else effective_frame):
+        recorded_any = _cache_recording_sample(current_sample, effective_frame) or recorded_any
+    if recorded_any:
+        if last_frame is None:
+            state.recording_sample_count += 1
+        elif effective_frame > last_frame:
+            state.recording_sample_count += effective_frame - last_frame
+        state.recording_last_written_frame = effective_frame
+        state.recording_last_sample = current_sample
+
+    if current_frame >= frame_end:
+        stop_recording()
 
 
 def _apply_preview_root_motion(preview_arm, root, waist, bones, context, lock_to_center: bool):
@@ -981,6 +1825,7 @@ def apply_timer():
 
     driven_bones = set()
     driven_shapes = set()
+    target_context = None
 
     if arm is not None:
         target_context = _ensure_receiver_target_context(scene, arm, preview_arm)
@@ -1076,6 +1921,8 @@ def apply_timer():
                 driven_shapes.add(actual)
 
     if state.recording:
-        record_current_sample(scene, arm, driven_bones, face, driven_shapes)
+        has_vmc_input = state.last_packet_ts > 0.0 and (root is not None or waist is not None or bool(bones) or bool(blends))
+        has_arkit_input = use_arkit_face and state.arkit_last_packet_ts > 0.0
+        record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_context, use_arkit_face, has_vmc_input or has_arkit_input)
 
     return rate

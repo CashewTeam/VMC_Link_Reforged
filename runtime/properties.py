@@ -117,6 +117,10 @@ FIXED_SCENE_PROPS = (
     "vmc_link_face_object",
     "vmc_link_preview_armature",
     "vmc_link_preview_face_object",
+    "vmc_link_record_start_frame",
+    "vmc_link_record_end_frame",
+    "vmc_link_record_transition_enabled",
+    "vmc_link_record_transition_frames",
     "vmc_link_bone_map_preset",
     "vmc_link_bone_map_save_name",
     "vmc_link_vmc_blend_preset",
@@ -132,6 +136,9 @@ FIXED_SCENE_PROPS = (
 def ensure_scene_props():
     scene_type = bpy.types.Scene
     defaults = get_connection_defaults()
+    scene = getattr(bpy.context, "scene", None)
+    record_start_default = int(getattr(scene, "frame_start", 1)) if scene is not None else 1
+    record_end_default = int(getattr(scene, "frame_end", 250)) if scene is not None else 250
 
     scene_type.vmc_link_port = bpy.props.IntProperty(
         name="端口",
@@ -221,6 +228,27 @@ def ensure_scene_props():
         description="中间层预览用的 ARKit 调试面部 Mesh",
         type=bpy.types.Object,
         poll=lambda _self, obj: obj is None or obj.type == "MESH",
+    )
+    scene_type.vmc_link_record_start_frame = bpy.props.IntProperty(
+        name="录制开始帧",
+        description="录制输出写入的起始帧",
+        default=record_start_default,
+    )
+    scene_type.vmc_link_record_end_frame = bpy.props.IntProperty(
+        name="录制结束帧",
+        description="录制输出写入的结束帧，达到后自动停止",
+        default=record_end_default,
+    )
+    scene_type.vmc_link_record_transition_enabled = bpy.props.BoolProperty(
+        name="启用起始姿态过渡",
+        description="从开始录制时当前目标静止姿态平滑过渡到首个有效动捕样本",
+        default=True,
+    )
+    scene_type.vmc_link_record_transition_frames = bpy.props.IntProperty(
+        name="过渡帧数",
+        description="起始姿态过渡占用的帧数",
+        default=24,
+        min=1,
     )
     scene_type.vmc_link_bone_map_preset = bpy.props.EnumProperty(
         name="预设",

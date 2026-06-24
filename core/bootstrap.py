@@ -18,6 +18,7 @@ from ..ui import (
     mapping_panel as ui_mapping,
     operators,
     preview_panel as ui_preview,
+    recording_panel as ui_recording,
 )
 
 
@@ -38,12 +39,14 @@ if _needs_reload:
         ui_main,
         ui_mapping,
         ui_preview,
+        ui_recording,
     ):
         importlib.reload(module)
 
 
 CLASSES = (
     ui_intermediate.VMC_LINK_PT_intermediate_panel,
+    *ui_recording.CLASSES,
     ui_mapping.VMC_LINK_PT_bone_mapping_panel,
     ui_mapping.VMC_LINK_PT_vmc_blend_mapping_panel,
     ui_mapping.VMC_LINK_PT_arkit_blend_mapping_panel,

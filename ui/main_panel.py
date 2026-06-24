@@ -16,11 +16,6 @@ def draw_main_panel(layout, context):
     else:
         row.operator("vmc_link.start_receiver", text="启动接收", icon="PLAY")
 
-    rec_row = layout.row(align=True)
-    rec_icon = "REC" if not runtime.is_recording() else "PAUSE"
-    rec_label = "开始录制" if not runtime.is_recording() else "停止录制"
-    rec_row.operator("vmc_link.toggle_recording", text=rec_label, icon=rec_icon)
-
     if network.is_session_active():
         if network.is_paused():
             layout.label(text="已暂停", icon="PAUSE")

@@ -34,6 +34,24 @@ next_ui_redraw_ts = 0.0
 frame_snapshot_deadline_ts = 0.0
 
 recording = False
+recording_frame = None
+recording_sample_count = 0
+recording_start_frame = None
+recording_start_ts = 0.0
+recording_pause_started_ts = 0.0
+recording_paused_duration = 0.0
+recording_last_written_frame = None
+recording_end_frame = None
+recording_armature_ref = None
+recording_face_ref = None
+recording_armature_action = None
+recording_face_action = None
+recording_tracks = {}
+recording_last_sample = None
+recording_transition_enabled = False
+recording_transition_frames = 0
+recording_transition_pending = False
+recording_transition_source_sample = None
 
 receiver_session_active = False
 receiver_paused = False
