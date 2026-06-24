@@ -46,6 +46,13 @@ def get_recording_transition_frames(scene=None) -> int:
     return int(getattr(scene, "vmc_link_record_transition_frames", 24)) if scene is not None else 24
 
 
+def is_recording_interpolation_enabled(scene=None) -> bool:
+    if state.recording:
+        return bool(state.recording_interpolation_enabled)
+    scene = scene or getattr(bpy.context, "scene", None)
+    return bool(getattr(scene, "vmc_link_record_interpolation_enabled", True)) if scene is not None else True
+
+
 def get_recording_range_error(scene) -> str:
     if scene is None:
         return "当前没有可用场景"
@@ -112,6 +119,7 @@ def _validate_recording_config(scene):
     return {
         "frame_start": frame_start,
         "frame_end": frame_end,
+        "interpolation_enabled": bool(getattr(scene, "vmc_link_record_interpolation_enabled", True)),
         "transition_enabled": transition_enabled and transition_frames > 0,
         "transition_frames": transition_frames,
     }
@@ -148,6 +156,7 @@ def start_recording(scene):
     state.recording_sample_count = 0
     state.recording_tracks = {}
     state.recording_last_sample = None
+    state.recording_interpolation_enabled = bool(config["interpolation_enabled"])
     state.recording_transition_enabled = bool(config["transition_enabled"])
     state.recording_transition_frames = int(config["transition_frames"])
     state.recording_transition_pending = bool(config["transition_enabled"])
@@ -186,6 +195,7 @@ def stop_recording():
     state.recording_face_action = None
     state.recording_tracks = {}
     state.recording_last_sample = None
+    state.recording_interpolation_enabled = True
     state.recording_transition_enabled = False
     state.recording_transition_frames = 0
     state.recording_transition_pending = False
@@ -1706,7 +1716,8 @@ def record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_
     previous_sample = state.recording_last_sample if state.recording_last_sample is not None else current_sample
     recorded_any = False
 
-    if last_frame is not None and previous_sample is not None and effective_frame > last_frame + 1:
+    interpolation_enabled = bool(state.recording_interpolation_enabled)
+    if interpolation_enabled and last_frame is not None and previous_sample is not None and effective_frame > last_frame + 1:
         frame_span = float(effective_frame - last_frame)
         for frame in range(last_frame + 1, effective_frame):
             factor = (frame - last_frame) / frame_span

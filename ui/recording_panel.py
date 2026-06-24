@@ -19,6 +19,7 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         range_error = runtime.get_recording_range_error(scene)
         frame_start = runtime.get_recording_start_frame(scene)
         frame_end = runtime.get_recording_end_frame(scene)
+        interpolation_enabled = runtime.is_recording_interpolation_enabled(scene)
         transition_enabled = runtime.is_recording_transition_enabled(scene)
         transition_frames = runtime.get_recording_transition_frames(scene)
 
@@ -30,6 +31,7 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         else:
             status_col.label(text="当前未在录制", icon="INFO")
         status_col.label(text=f"输出范围：{frame_start} - {frame_end}")
+        status_col.label(text=f"补帧插值：{'启用' if interpolation_enabled else '关闭'}")
         status_col.label(text=f"起始过渡：{'启用' if transition_enabled else '关闭'}")
         if transition_enabled:
             status_col.label(text=f"过渡帧数：{transition_frames}")
@@ -49,9 +51,11 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
 
         transition_box = layout.box()
         transition_col = transition_box.column(align=True)
-        transition_col.label(text="起始过渡", icon="IPO_EASE_IN_OUT")
+        transition_col.label(text="录制采样", icon="IPO_EASE_IN_OUT")
+        transition_col.prop(scene, "vmc_link_record_interpolation_enabled")
         transition_col.prop(scene, "vmc_link_record_transition_enabled")
         transition_col.prop(scene, "vmc_link_record_transition_frames")
+        transition_col.label(text="关闭补帧插值后，只保留实际采样落点", icon="INFO")
         transition_col.label(text="从接收启动时的初始姿态过渡到过渡结束帧姿态", icon="INFO")
 
         action_box = layout.box()

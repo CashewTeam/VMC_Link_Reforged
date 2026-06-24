@@ -241,7 +241,12 @@ def ensure_scene_props():
     )
     scene_type.vmc_link_record_transition_enabled = bpy.props.BoolProperty(
         name="启用起始姿态过渡",
-        description="从开始录制时当前目标静止姿态平滑过渡到首个有效动捕样本",
+        description="从接收启动时保存的目标初始姿态平滑过渡到过渡结束帧对应的有效动捕姿态",
+        default=True,
+    )
+    scene_type.vmc_link_record_interpolation_enabled = bpy.props.BoolProperty(
+        name="启用补帧插值",
+        description="录制跨过多个工程帧时，为中间帧补写插值关键帧；关闭后只记录实际采样帧",
         default=True,
     )
     scene_type.vmc_link_record_transition_frames = bpy.props.IntProperty(

@@ -48,6 +48,7 @@ recording_armature_action = None
 recording_face_action = None
 recording_tracks = {}
 recording_last_sample = None
+recording_interpolation_enabled = True
 recording_transition_enabled = False
 recording_transition_frames = 0
 recording_transition_pending = False
