@@ -207,6 +207,8 @@ def _build_receiver_target_context(scene):
         "is_arp": False,
         "preview_start_matrices": {},
         "target_start_matrices": {},
+        "preview_start_rotations": {},
+        "target_start_rotations": {},
         "arp_rotation_calibrations": {},
         "arp_filtered_source_rotations": {},
         "arp_filtered_rotations": {},
@@ -228,6 +230,10 @@ def _build_receiver_target_context(scene):
         context["target_start_matrices"][target_name] = target_bone.matrix.copy()
         source_start_rotation = source_bone.matrix.to_quaternion()
         target_start_rotation = target_bone.matrix.to_quaternion()
+        source_start_rotation.normalize()
+        target_start_rotation.normalize()
+        context["preview_start_rotations"][source_name] = source_start_rotation.copy()
+        context["target_start_rotations"][target_name] = target_start_rotation.copy()
         source_axis = source_start_rotation @ Vector((0.0, 1.0, 0.0))
         target_axis = target_start_rotation @ Vector((0.0, 1.0, 0.0))
         target_to_source_axis = target_axis.rotation_difference(source_axis)
@@ -317,7 +323,16 @@ def _apply_arp_target_armature(scene, arm_obj, preview_arm, context):
             source_rotation = source_matrix.to_quaternion()
             source_rotation.normalize()
             source_rotation = _filter_arp_source_rotation(source_name, source_rotation, context)
-            desired_rotation = source_rotation @ calibration
+            if mapping_arp.uses_delta_rotation(source_name):
+                source_start_rotation = context["preview_start_rotations"].get(source_name)
+                target_start_rotation = context["target_start_rotations"].get(target_name)
+                if source_start_rotation is None or target_start_rotation is None:
+                    continue
+                source_delta = source_rotation @ source_start_rotation.inverted()
+                source_delta.normalize()
+                desired_rotation = source_delta @ target_start_rotation
+            else:
+                desired_rotation = source_rotation @ calibration
             desired_rotation.normalize()
             start_matrix = context["target_start_matrices"].get(target_name) or target_bone.matrix.copy()
             desired_matrix = Matrix.LocRotScale(

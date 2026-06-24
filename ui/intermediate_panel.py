@@ -39,6 +39,7 @@ class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):
                 body_col.label(text=f"缺失骨骼: {missing_preview}{suffix}", icon="INFO")
 
         body_col.operator("vmc_link.create_dummy_armature", text="创建/重建 VRM 预览骨架", icon="ARMATURE_DATA")
+        body_col.operator("vmc_link.calibrate_dummy_armature_lengths", text="按目标骨架校准长度", icon="DRIVER_DISTANCE")
 
         face_box = layout.box()
         face_col = face_box.column(align=True)

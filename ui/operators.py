@@ -143,6 +143,20 @@ class VMC_LINK_OT_create_dummy_armature(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class VMC_LINK_OT_calibrate_dummy_armature_lengths(bpy.types.Operator):
+    bl_idname = "vmc_link.calibrate_dummy_armature_lengths"
+    bl_label = "按目标骨架校准 VRM 预览骨架长度"
+
+    def execute(self, context):
+        try:
+            calibrated = dummy_vrm.calibrate_intermediate_rig_lengths(context)
+            self.report({"INFO"}, f"已校准 {len(calibrated)} 根 VRM 预览骨骼长度")
+        except Exception as exc:
+            self.report({"ERROR"}, f"校准 VRM 预览骨架长度失败：{exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class VMC_LINK_OT_import_arkit_preview_face(bpy.types.Operator):
     bl_idname = "vmc_link.import_arkit_preview_face"
     bl_label = "导入 ARKit 调试面部"
@@ -245,6 +259,7 @@ CLASSES = (
     VMC_LINK_OT_save_mapping_preset,
     VMC_LINK_OT_load_mapping_preset,
     VMC_LINK_OT_create_dummy_armature,
+    VMC_LINK_OT_calibrate_dummy_armature_lengths,
     VMC_LINK_OT_import_arkit_preview_face,
     VMC_LINK_OT_rebuild_maps,
     VMC_LINK_OT_inspect_arp_rig,

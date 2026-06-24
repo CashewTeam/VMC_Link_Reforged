@@ -194,6 +194,19 @@ ARP_RUNTIME_SOURCE_GROUPS = (
 )
 
 ARP_ALLOWED_CONTROL_TARGETS = frozenset(ARP_DEFAULT_BONE_TARGETS.values())
+ARP_DELTA_ROTATION_SOURCE_BONES = frozenset(
+    (
+        "LeftFoot",
+        "RightFoot",
+        "LeftToeBase",
+        "RightToeBase",
+        *constants.INTERMEDIATE_OPTIONAL_BONES,
+    )
+)
+
+
+def uses_delta_rotation(source_name: str) -> bool:
+    return source_name in ARP_DELTA_ROTATION_SOURCE_BONES
 
 
 def _has_pose_bones(obj) -> bool:

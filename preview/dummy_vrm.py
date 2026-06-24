@@ -304,6 +304,89 @@ def create_intermediate_rig(context, rebuild: bool = False):
         raise
 
 
+def _world_bone_length(arm_obj, pose_bone) -> float:
+    head = arm_obj.matrix_world @ pose_bone.head
+    tail = arm_obj.matrix_world @ pose_bone.tail
+    return (tail - head).length
+
+
+def calibrate_intermediate_rig_lengths(context):
+    scene = context.scene
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    target_arm = getattr(scene, "vmc_link_armature", None)
+    if not is_vrm_intermediate_rig(preview_arm):
+        raise RuntimeError("请先创建 VRM 预览骨架")
+    if target_arm is None or getattr(target_arm, "type", None) != "ARMATURE" or getattr(target_arm, "pose", None) is None:
+        raise RuntimeError("请先绑定目标骨架")
+
+    from ..mapping import arp as mapping_arp
+
+    analysis = mapping_arp.analyze_armature(target_arm)
+    if not analysis["is_arp"]:
+        raise RuntimeError("当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
+    runtime_map = {
+        source_name: analysis["resolved_default_targets"][source_name]
+        for source_name in mapping_arp.ARP_RUNTIME_SOURCE_ORDER
+        if source_name in analysis["resolved_default_targets"]
+    }
+    if not runtime_map:
+        raise RuntimeError("当前目标骨架没有可用于长度校准的 ARP 映射")
+
+    if context.object and context.object.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    bpy.ops.object.select_all(action="DESELECT")
+    context.view_layer.objects.active = preview_arm
+    preview_arm.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    edit_bones = preview_arm.data.edit_bones
+    calibrated = []
+    try:
+        for source_name in mapping_arp.ARP_RUNTIME_SOURCE_ORDER:
+            target_name = runtime_map.get(source_name)
+            edit_bone = edit_bones.get(source_name)
+            target_bone = target_arm.pose.bones.get(target_name) if target_name else None
+            if edit_bone is None or target_bone is None:
+                continue
+
+            direction = edit_bone.tail - edit_bone.head
+            if direction.length <= 0.00001:
+                continue
+            local_unit = direction.normalized()
+            world_unit_length = (preview_arm.matrix_world.to_3x3() @ local_unit).length
+            if world_unit_length <= 0.00001:
+                continue
+            target_world_length = _world_bone_length(target_arm, target_bone)
+            desired_local_length = max(0.002, target_world_length / world_unit_length)
+            edit_bone.tail = edit_bone.head + local_unit * desired_local_length
+            calibrated.append(source_name)
+        _align_intermediate_rig_anchor_bones(edit_bones)
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    tag_intermediate_rig(preview_arm)
+    return calibrated
+
+
+def _set_bone_head_preserve_length(edit_bone, new_head):
+    direction = edit_bone.tail - edit_bone.head
+    if direction.length <= 0.00001:
+        return
+    length = direction.length
+    edit_bone.head = new_head
+    edit_bone.tail = edit_bone.head + direction.normalized() * length
+
+
+def _align_intermediate_rig_anchor_bones(edit_bones):
+    upper_chest = edit_bones.get("UpperChest")
+    if upper_chest is not None:
+        for name in ("LeftShoulder", "RightShoulder"):
+            shoulder = edit_bones.get(name)
+            if shoulder is not None:
+                _set_bone_head_preserve_length(shoulder, upper_chest.tail.copy())
+
+
 def collect_intermediate_status(scene):
     arm_obj = getattr(scene, "vmc_link_preview_armature", None)
     face_obj = getattr(scene, "vmc_link_preview_face_object", None)
