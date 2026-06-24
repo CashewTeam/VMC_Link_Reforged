@@ -22,17 +22,17 @@
 
 当前主要模块包括：
 
-- `constants.py`
-- `properties.py`
-- `network.py`
-- `runtime.py`
-- `mapping.py`
-- `presets.py`
-- `dummy_vrm.py`
-- `ui_main.py`
-- `ui_preview.py`
-- `ui_mapping.py`
-- `ui_intermediate.py`
+- `core/constants.py`
+- `runtime/properties.py`
+- `runtime/network.py`
+- `runtime/driver.py`
+- `mapping/mapper.py`
+- `mapping/preset_store.py`
+- `preview/dummy_vrm.py`
+- `ui/main_panel.py`
+- `ui/preview_panel.py`
+- `ui/mapping_panel.py`
+- `ui/intermediate_panel.py`
 
 #### 2. UI 中文化
 

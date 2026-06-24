@@ -1,6 +1,7 @@
 import bpy
 
-from . import dummy_vrm, runtime
+from ..preview import dummy_vrm
+from ..runtime import driver as runtime
 
 
 class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):

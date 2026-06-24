@@ -2,7 +2,9 @@ import time
 
 import bpy
 
-from . import constants, helpers, network, runtime, state
+from ..core import constants, helpers, state
+from ..runtime import driver as runtime
+from ..runtime import network
 
 
 def draw_vmc_preview(layout):

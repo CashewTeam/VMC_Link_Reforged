@@ -5,22 +5,19 @@ import bpy
 
 _needs_reload = "operators" in locals()
 
-from . import (
-    constants,
-    dummy_vrm,
-    helpers,
-    mapping,
-    mapping_arp,
-    network,
+from . import constants, helpers, state
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from ..mapping import preset_store as presets
+from ..preview import dummy_vrm
+from ..runtime import driver as runtime
+from ..runtime import network, properties
+from ..ui import (
+    intermediate_panel as ui_intermediate,
+    main_panel as ui_main,
+    mapping_panel as ui_mapping,
     operators,
-    presets,
-    properties,
-    runtime,
-    state,
-    ui_intermediate,
-    ui_main,
-    ui_mapping,
-    ui_preview,
+    preview_panel as ui_preview,
 )
 
 

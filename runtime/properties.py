@@ -1,7 +1,11 @@
 import bpy
 from bpy.app.handlers import persistent
 
-from . import constants, dummy_vrm, mapping, mapping_arp, presets, state
+from ..core import constants, state
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from ..mapping import preset_store as presets
+from ..preview import dummy_vrm
 
 
 def get_addon_preferences():

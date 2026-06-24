@@ -3,7 +3,10 @@ import time
 import bpy
 from mathutils import Matrix, Vector
 
-from . import constants, helpers, mapping, mapping_arp, network, properties, state
+from ..core import constants, helpers, state
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from . import network, properties
 
 
 def is_recording() -> bool:

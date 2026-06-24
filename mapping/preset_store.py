@@ -1,7 +1,11 @@
 import json
 import os
 
-from . import constants, mapping
+from ..core import constants
+from . import mapper as mapping
+
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 _preset_items_cache = {
     constants.MAPPING_KIND_BONE: [],
@@ -15,7 +19,7 @@ def mapping_preset_dir(kind: str) -> str:
         subdir = constants.MAPPING_PRESET_SUBDIRS[kind]
     except KeyError as exc:
         raise KeyError(f"未知映射类型：{kind}") from exc
-    return os.path.join(os.path.dirname(__file__), "presets", subdir)
+    return os.path.join(_PROJECT_ROOT, "presets", subdir)
 
 
 def ensure_mapping_preset_dir(kind: str) -> str:

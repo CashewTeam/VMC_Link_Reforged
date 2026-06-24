@@ -1,7 +1,7 @@
 import bpy
 from mathutils import Quaternion
 
-from . import constants, helpers, state
+from ..core import constants, helpers, state
 
 
 def _build_canonical_bone_lookups():
@@ -44,7 +44,7 @@ def handle_armature_changed(scene):
     arm = getattr(scene, "vmc_link_armature", None)
     if not has_pose_bones(arm):
         return
-    from . import mapping_arp
+    from . import arp as mapping_arp
 
     if mapping_arp.analyze_armature(arm)["is_arp"]:
         mapping_arp.apply_standard_scene_mapping(scene)
@@ -469,7 +469,7 @@ def rebuild_maps(scene):
     state.cached_arkit_blend_map = {}
 
     if arm is not None:
-        from . import mapping_arp
+        from . import arp as mapping_arp
 
         arp_analysis = mapping_arp.analyze_armature(arm)
         if arp_analysis["is_arp"]:

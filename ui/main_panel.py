@@ -1,6 +1,7 @@
 import time
 
-from . import network, runtime
+from ..runtime import driver as runtime
+from ..runtime import network
 
 
 def draw_main_panel(layout, context):

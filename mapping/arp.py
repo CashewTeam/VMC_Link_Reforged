@@ -1,4 +1,5 @@
-from . import constants, mapping
+from ..core import constants
+from . import mapper as mapping
 
 
 ARP_BUILTIN_PRESET_FILE = "arp_fk_humanoid.json"

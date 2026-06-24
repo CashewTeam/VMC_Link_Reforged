@@ -2,7 +2,7 @@
 
 面向 Blender 的实时动捕接收插件。
 
-当前版本：`0.12.2`
+当前版本：`0.12.3`
 
 项目当前重点不是做“任意来源一键适配任意骨架”，而是先把一条稳定、可调试、可扩展的实时驱动链路固化下来。现在这条链路已经明确拆成两部分：
 
@@ -270,29 +270,29 @@ presets/
 
 - [__init__.py](./__init__.py)
   - 插件入口、版本信息、面板入口
-- [main.py](./main.py)
+- [core/bootstrap.py](./core/bootstrap.py)
   - 模块装配与注册
-- [constants.py](./constants.py)
+- [core/constants.py](./core/constants.py)
   - 默认值、枚举、ARKit 52 Key、集合名等常量
-- [properties.py](./properties.py)
+- [runtime/properties.py](./runtime/properties.py)
   - Scene 属性注册、兼容迁移、load_post 迁移钩子
-- [network.py](./network.py)
+- [runtime/network.py](./runtime/network.py)
   - UDP 接收器、dispatcher、原始缓存更新
-- [runtime.py](./runtime.py)
+- [runtime/driver.py](./runtime/driver.py)
   - 预览层驱动、目标层驱动、录制、UI 刷新控制
-- [mapping.py](./mapping.py)
+- [mapping/mapper.py](./mapping/mapper.py)
   - 别名匹配、手动映射、缓存重建
-- [presets.py](./presets.py)
+- [mapping/preset_store.py](./mapping/preset_store.py)
   - 三套 JSON 预设
-- [dummy_vrm.py](./dummy_vrm.py)
+- [preview/dummy_vrm.py](./preview/dummy_vrm.py)
   - 预览骨架创建 / 重建、ARKit 调试面部导入、插件集合管理
-- [ui_main.py](./ui_main.py)
+- [ui/main_panel.py](./ui/main_panel.py)
   - 主面板
-- [ui_intermediate.py](./ui_intermediate.py)
+- [ui/intermediate_panel.py](./ui/intermediate_panel.py)
   - 中间层预览面板
-- [ui_mapping.py](./ui_mapping.py)
+- [ui/mapping_panel.py](./ui/mapping_panel.py)
   - 映射面板
-- [ui_preview.py](./ui_preview.py)
+- [ui/preview_panel.py](./ui/preview_panel.py)
   - 底部折叠式数据预览面板
 
 ## 下一阶段重点

@@ -1,6 +1,9 @@
 import bpy
 
-from . import constants, mapping, mapping_arp, presets
+from ..core import constants
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from ..mapping import preset_store as presets
 
 
 def draw_mapping_preset_controls(layout, scene, kind: str):

@@ -1,6 +1,11 @@
 import bpy
 
-from . import constants, dummy_vrm, mapping, mapping_arp, network, presets, runtime
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from ..mapping import preset_store as presets
+from ..preview import dummy_vrm
+from ..runtime import driver as runtime
+from ..runtime import network
 
 
 class VMC_LINK_OT_toggle_receiver(bpy.types.Operator):

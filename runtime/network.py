@@ -6,7 +6,10 @@ import time
 import bpy
 from pythonosc.dispatcher import Dispatcher
 
-from . import constants, helpers, mapping, properties, runtime, state
+from ..core import constants, helpers, state
+from ..mapping import mapper as mapping
+from . import driver as runtime
+from . import properties
 
 
 def is_running() -> bool:

@@ -7,7 +7,7 @@
 bl_info = {
     "name": "VMC Link",
     "author": "Internet Addict",
-    "version": (0, 12, 2),
+    "version": (0, 12, 3),
     "blender": (4, 2, 0),
     "location": "3D 视图 > 侧边栏 > VMC Link",
     "description": "接收 VMC 与 RhyLive ARKit OSC，预览原始数据，并管理映射预设",
@@ -119,7 +119,7 @@ def _load_main_module():
         if _needs_reload and _main is not None:
             _main = importlib.reload(_main)
         else:
-            from . import main as _imported_main
+            from .core import bootstrap as _imported_main
             _main = _imported_main
     except Exception as e:
         _main = None

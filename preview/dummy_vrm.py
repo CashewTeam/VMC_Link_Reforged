@@ -3,11 +3,14 @@ import os
 import bpy
 from mathutils import Vector
 
-from . import constants, helpers
+from ..core import constants, helpers
+
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 
 def _asset_path(file_name: str) -> str:
-    return os.path.join(os.path.dirname(__file__), "assets", file_name)
+    return os.path.join(_PROJECT_ROOT, "assets", file_name)
 
 
 def get_arkit_debug_asset_path() -> str:
