@@ -52,7 +52,7 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         transition_col.label(text="起始过渡", icon="IPO_EASE_IN_OUT")
         transition_col.prop(scene, "vmc_link_record_transition_enabled")
         transition_col.prop(scene, "vmc_link_record_transition_frames")
-        transition_col.label(text="从当前目标静止姿态过渡到首个有效动捕样本", icon="INFO")
+        transition_col.label(text="从接收启动时的初始姿态过渡到过渡结束帧姿态", icon="INFO")
 
         action_box = layout.box()
         action_col = action_box.column(align=True)

@@ -346,7 +346,8 @@ def stop_server(_scene):
     if not is_session_active() and not is_running():
         return
 
-    runtime.stop_recording()
+    if runtime.is_recording():
+        runtime.stop_recording()
     _close_receiver_handles()
     state.reset_runtime_buffers()
     runtime.restore_receiver_start_state()

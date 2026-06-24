@@ -52,6 +52,7 @@ recording_transition_enabled = False
 recording_transition_frames = 0
 recording_transition_pending = False
 recording_transition_source_sample = None
+recording_transition_target_sample = None
 
 receiver_session_active = False
 receiver_paused = False

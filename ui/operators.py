@@ -246,12 +246,15 @@ class VMC_LINK_OT_toggle_recording(bpy.types.Operator):
         scene = context.scene
         try:
             if runtime.is_recording():
-                written_frames = runtime.stop_recording()
+                written_frames = runtime.get_recording_sample_count()
+                runtime._stop_recording_session(scene)
                 self.report({"INFO"}, f"停止录制：已写入 {written_frames} 帧")
             else:
-                if not network.is_session_active():
-                    self.report({"ERROR"}, "请先启动接收器")
-                    return {"CANCELLED"}
+                scene.frame_set(int(runtime.get_recording_start_frame(scene)))
+                if network.is_paused():
+                    network.resume_server(scene)
+                elif not network.is_session_active():
+                    network.start_server(scene)
                 runtime.start_recording(scene)
                 self.report(
                     {"INFO"},
@@ -291,7 +294,11 @@ class VMC_LINK_OT_clear_recording_range_keys(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            result = runtime.clear_recording_range_keys(context.scene)
+            scene = context.scene
+            frame_start = int(runtime.get_recording_start_frame(scene))
+            scene.frame_set(frame_start)
+            result = runtime.clear_recording_range_keys(scene)
+            scene.frame_set(frame_start)
         except Exception as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}

@@ -2,7 +2,7 @@ import math
 import time
 
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ..core import constants, helpers, state
 from ..mapping import arp as mapping_arp
@@ -134,7 +134,7 @@ def start_recording(scene):
     target_context = _build_receiver_target_context(scene) if mapping.has_pose_bones(arm_obj) else None
     record_bones = _recordable_target_bones(scene, arm_obj, target_context, set())
     record_shapes = _recordable_target_shapes(scene, face_obj, is_arkit_face_source_enabled(scene), set())
-    transition_source_sample = _build_recording_sample(arm_obj, record_bones, face_obj, record_shapes, target_context)
+    transition_source_sample = _build_recording_transition_source_sample(arm_obj, record_bones, face_obj, record_shapes, target_context)
 
     _prepare_recording_target_actions(arm_obj, face_obj)
     state.recording = True
@@ -152,6 +152,7 @@ def start_recording(scene):
     state.recording_transition_frames = int(config["transition_frames"])
     state.recording_transition_pending = bool(config["transition_enabled"])
     state.recording_transition_source_sample = transition_source_sample if config["transition_enabled"] else None
+    state.recording_transition_target_sample = None
     state.recording_armature_ref = arm_obj if mapping.has_pose_bones(arm_obj) else None
     state.recording_face_ref = face_obj if mapping.has_shape_keys(face_obj) else None
     state.dirty = True
@@ -189,8 +190,17 @@ def stop_recording():
     state.recording_transition_frames = 0
     state.recording_transition_pending = False
     state.recording_transition_source_sample = None
+    state.recording_transition_target_sample = None
     state.recording_sample_count = 0
     return written_frames
+
+
+def _stop_recording_session(scene):
+    if network.is_session_active() or network.is_running():
+        network.stop_server(scene)
+        return
+    if state.recording:
+        stop_recording()
 
 
 def set_recording(value: bool, scene=None):
@@ -267,6 +277,23 @@ def _capture_transform_state(item):
         "rotation_axis_angle": tuple(getattr(item, "rotation_axis_angle", (0.0, 0.0, 1.0, 0.0))),
         "scale": tuple(getattr(item, "scale", (1.0, 1.0, 1.0))),
     }
+
+
+def _rotation_quaternion_from_snapshot(transform_state):
+    if not transform_state:
+        return Quaternion()
+
+    rotation_mode = str(transform_state.get("rotation_mode", "XYZ"))
+    if rotation_mode == "QUATERNION":
+        return _as_quaternion(transform_state.get("rotation_quaternion", (1.0, 0.0, 0.0, 0.0)))
+    if rotation_mode == "AXIS_ANGLE":
+        axis_angle = transform_state.get("rotation_axis_angle", (0.0, 0.0, 1.0, 0.0))
+        angle = float(axis_angle[0])
+        axis = Vector(axis_angle[1:4])
+        if axis.length_squared <= 1e-12:
+            return Quaternion()
+        return _as_quaternion(Quaternion(axis.normalized(), angle))
+    return _as_quaternion(Euler(transform_state.get("rotation_euler", (0.0, 0.0, 0.0)), rotation_mode).to_quaternion())
 
 
 def _restore_transform_state(item, snapshot):
@@ -354,6 +381,15 @@ def capture_receiver_start_state(scene):
     state.receiver_target_context = _build_receiver_target_context(scene)
     state.receiver_session_active = True
     state.receiver_paused = False
+
+
+def _receiver_face_snapshot(face_obj):
+    if face_obj is None:
+        return None
+    for snapshot in state.receiver_face_snapshots:
+        if snapshot.get("object") is face_obj:
+            return snapshot
+    return None
 
 
 def _build_receiver_preview_context(scene):
@@ -1472,6 +1508,48 @@ def _build_recording_sample(arm, record_bones, face, record_shapes, target_conte
     return sample
 
 
+def _build_recording_transition_source_sample(arm, record_bones, face, record_shapes, target_context=None):
+    sample = _build_recording_sample(arm, record_bones, face, record_shapes, target_context)
+
+    arm_snapshot = _receiver_armature_snapshot(arm)
+    if arm_snapshot is not None:
+        object_state = arm_snapshot.get("object_state", {})
+        sample["arm"] = {
+            "location": _as_float_tuple(object_state.get("location", (0.0, 0.0, 0.0))),
+            "rotation_mode": str(object_state.get("rotation_mode", "XYZ")),
+            "rotation_quaternion": _as_float_tuple(_rotation_quaternion_from_snapshot(object_state)),
+        }
+
+        sample["bones"] = {}
+        bone_snapshots = arm_snapshot.get("pose_bones", {})
+        for bone_name in record_bones:
+            bone_snapshot = bone_snapshots.get(bone_name)
+            if bone_snapshot is None:
+                continue
+            sample["bones"][bone_name] = {
+                "location": _as_float_tuple(bone_snapshot.get("location", (0.0, 0.0, 0.0))),
+                "rotation_mode": str(bone_snapshot.get("rotation_mode", "XYZ")),
+                "rotation_quaternion": _as_float_tuple(_rotation_quaternion_from_snapshot(bone_snapshot)),
+            }
+
+        if target_context and target_context.get("is_arp"):
+            ik_fk_switches = arm_snapshot.get("arp_state", {}).get("ik_fk_switches", {})
+            sample["ik_fk_switches"] = {}
+            for bone_name in mapping_arp.ARP_IK_FK_CONTROLS:
+                if bone_name in ik_fk_switches:
+                    sample["ik_fk_switches"][bone_name] = float(ik_fk_switches[bone_name])
+
+    face_snapshot = _receiver_face_snapshot(face)
+    if face_snapshot is not None and sample.get("shape_datablock") is not None:
+        sample["shapes"] = {}
+        snapshot_shape_keys = face_snapshot.get("shape_keys", {})
+        for key_name in record_shapes:
+            if key_name in snapshot_shape_keys:
+                sample["shapes"][key_name] = float(snapshot_shape_keys[key_name])
+
+    return sample
+
+
 def _interpolate_recording_sample(previous_sample, current_sample, factor: float):
     if previous_sample is None or factor >= 1.0:
         return current_sample
@@ -1583,6 +1661,7 @@ def _write_transition_frames(current_sample):
     state.recording_sample_count = max(0, transition_last_frame - frame_start + 1)
     state.recording_transition_pending = False
     state.recording_transition_source_sample = None
+    state.recording_transition_target_sample = None
     return transition_last_frame
 
 
@@ -1590,7 +1669,7 @@ def record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_
     current_frame = _current_recording_frame(scene)
     frame_end = int(state.recording_end_frame if state.recording_end_frame is not None else current_frame)
     if state.recording_start_frame is not None and frame_end < state.recording_start_frame:
-        stop_recording()
+        _stop_recording_session(scene)
         return
 
     effective_frame = min(current_frame, frame_end)
@@ -1601,16 +1680,27 @@ def record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_
     current_sample = _build_recording_sample(arm, record_bones, face, record_shapes, target_context)
 
     if state.recording_transition_pending:
-        if not has_valid_input:
+        transition_last_frame = min(
+            frame_end,
+            int(state.recording_start_frame) + max(0, int(state.recording_transition_frames) - 1),
+        )
+        if has_valid_input:
+            state.recording_transition_target_sample = current_sample
+        elif state.recording_transition_target_sample is None:
             if current_frame >= frame_end:
-                stop_recording()
+                _stop_recording_session(scene)
             return
-        _write_transition_frames(current_sample)
+        if effective_frame < transition_last_frame:
+            if current_frame >= frame_end:
+                _stop_recording_session(scene)
+            return
+        transition_target_sample = state.recording_transition_target_sample or current_sample
+        _write_transition_frames(transition_target_sample)
         last_frame = state.recording_last_written_frame
 
     if not has_valid_input and state.recording_last_sample is None:
         if current_frame >= frame_end:
-            stop_recording()
+            _stop_recording_session(scene)
         return
 
     previous_sample = state.recording_last_sample if state.recording_last_sample is not None else current_sample
@@ -1634,7 +1724,7 @@ def record_current_sample(scene, arm, driven_bones, face, driven_shapes, target_
         state.recording_last_sample = current_sample
 
     if current_frame >= frame_end:
-        stop_recording()
+        _stop_recording_session(scene)
 
 
 def _apply_preview_root_motion(preview_arm, root, waist, bones, context, lock_to_center: bool):
