@@ -45,13 +45,9 @@ def describe_receiver_endpoints(scene) -> str:
 
 
 def get_root_motion_source() -> str:
-    if state.root_buf is not None:
-        return "Root/Pos"
-    if state.waist_buf is not None:
-        return "Tra/Pos"
-    if mapping.get_vmc_bone_pose(state.bone_buf, "Hips") is not None:
-        return "Bone/Pos:Hips"
-    return "无"
+    bones = mapping.canonicalize_vmc_bones(state.bone_buf)
+    source_name, raw = _select_root_motion_pose(state.root_buf, state.waist_buf, bones, include_hips=True)
+    return source_name if raw is not None else "无"
 
 
 def get_receiver_status_label(scene) -> str:
@@ -159,9 +155,20 @@ def capture_receiver_start_state(scene):
     state.receiver_face_snapshots = faces
     mapping_arp.prepare_receiver_session(scene)
     bpy.context.view_layer.update()
+    state.receiver_preview_context = _build_receiver_preview_context(scene)
     state.receiver_target_context = _build_receiver_target_context(scene)
     state.receiver_session_active = True
     state.receiver_paused = False
+
+
+def _build_receiver_preview_context(scene):
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    return {
+        "preview": preview_arm,
+        "preview_start_location": preview_arm.location.copy() if preview_arm is not None else None,
+        "root_source": None,
+        "root_baseline_location": None,
+    }
 
 
 def restore_receiver_start_state():
@@ -271,18 +278,48 @@ def _ensure_receiver_target_context(scene, arm_obj, preview_arm):
     return context
 
 
-def _apply_target_root_motion(arm_obj, root, waist, context):
+def _ensure_receiver_preview_context(scene, preview_arm):
+    context = state.receiver_preview_context
+    if context.get("preview") is preview_arm:
+        return context
+    context = _build_receiver_preview_context(scene)
+    state.receiver_preview_context = context
+    return context
+
+
+def _root_motion_location(raw):
+    if raw is None:
+        return None
+    location, _rotation = helpers.convert_vmc_pose(*raw)
+    return location
+
+
+def _root_motion_has_position(raw) -> bool:
+    location = _root_motion_location(raw)
+    return location is not None and location.length > constants.LOC_EPS
+
+
+def _select_root_motion_pose(root, waist, bones, include_hips: bool):
+    hips_pose = mapping.get_vmc_bone_pose(bones, "Hips") if include_hips else None
+    if root is not None and (_root_motion_has_position(root) or hips_pose is None):
+        return "Root/Pos", root
+    if waist is not None and (_root_motion_has_position(waist) or hips_pose is None):
+        return "Tra/Pos", waist
+    if include_hips:
+        if hips_pose is not None:
+            return "Bone/Pos:Hips", hips_pose
+    if root is not None:
+        return "Root/Pos", root
+    if waist is not None:
+        return "Tra/Pos", waist
+    return None, None
+
+
+def _apply_target_root_motion(arm_obj, root, waist, bones, context, lock_to_center: bool):
     if arm_obj is None or context.get("target_start_world") is None:
         return
 
-    source_name = None
-    raw = None
-    if root is not None:
-        source_name = "Root/Pos"
-        raw = root
-    elif waist is not None:
-        source_name = "Tra/Pos"
-        raw = waist
+    source_name, raw = _select_root_motion_pose(root, waist, bones, include_hips=not lock_to_center)
     if raw is None:
         return
 
@@ -295,8 +332,13 @@ def _apply_target_root_motion(arm_obj, root, waist, context):
     baseline_location = context["root_baseline_location"]
     baseline_rotation = context["root_baseline_rotation"]
     delta_location = current_location - baseline_location
-    delta_rotation = current_rotation @ baseline_rotation.inverted()
-    delta_rotation.normalize()
+    if source_name == "Bone/Pos:Hips":
+        delta_rotation = Matrix.Identity(3).to_quaternion()
+    else:
+        delta_rotation = current_rotation @ baseline_rotation.inverted()
+        delta_rotation.normalize()
+    if lock_to_center:
+        delta_location = Vector((0.0, 0.0, 0.0))
 
     start_location, start_rotation, start_scale = context["target_start_world"].decompose()
     desired_world = Matrix.LocRotScale(
@@ -714,24 +756,38 @@ def record_current_sample(scene, arm, driven_bones, face, driven_shapes):
         scene.frame_set(scene.frame_current + 1)
 
 
-def _apply_preview_armature(preview_arm, root, waist, bones, blends):
+def _apply_preview_root_motion(preview_arm, root, waist, bones, context, lock_to_center: bool):
     if preview_arm is None or getattr(preview_arm, "type", None) != "ARMATURE":
         return
 
-    hips_pose = mapping.get_vmc_bone_pose(bones, "Hips")
+    if lock_to_center:
+        if helpers.vec_changed(preview_arm.location, Vector((0.0, 0.0, 0.0))):
+            preview_arm.location = (0.0, 0.0, 0.0)
+        return
 
-    if root is not None:
-        root_loc, _ = helpers.convert_vmc_pose(*root)
-        if helpers.vec_changed(preview_arm.location, root_loc):
-            preview_arm.location = root_loc
-    elif waist is not None:
-        waist_loc, _ = helpers.convert_vmc_pose(*waist)
-        if helpers.vec_changed(preview_arm.location, waist_loc):
-            preview_arm.location = waist_loc
-    elif hips_pose is not None:
-        hips_loc, _ = helpers.convert_vmc_pose(*hips_pose)
-        if helpers.vec_changed(preview_arm.location, hips_loc):
-            preview_arm.location = hips_loc
+    source_name, raw_root_motion = _select_root_motion_pose(root, waist, bones, include_hips=True)
+    if raw_root_motion is None:
+        return
+
+    current_location, _rotation = helpers.convert_vmc_pose(*raw_root_motion)
+    if context.get("root_source") != source_name or context.get("root_baseline_location") is None:
+        context["root_source"] = source_name
+        context["root_baseline_location"] = current_location.copy()
+        if context.get("preview_start_location") is None:
+            context["preview_start_location"] = preview_arm.location.copy()
+
+    desired_location = context["preview_start_location"] + (current_location - context["root_baseline_location"])
+    if helpers.vec_changed(preview_arm.location, desired_location):
+        preview_arm.location = desired_location
+
+
+def _apply_preview_armature(preview_arm, root, waist, bones, blends, lock_to_center: bool, context=None):
+    if preview_arm is None or getattr(preview_arm, "type", None) != "ARMATURE":
+        return
+
+    if context is None:
+        context = {"preview": preview_arm, "preview_start_location": preview_arm.location.copy()}
+    _apply_preview_root_motion(preview_arm, root, waist, bones, context, lock_to_center)
 
     if root is not None:
         _, root_quat = helpers.convert_vmc_pose(*root)
@@ -833,6 +889,7 @@ def apply_timer():
     arm = getattr(scene, "vmc_link_armature", None)
     face = getattr(scene, "vmc_link_face_object", None)
     live_preview = bool(getattr(scene, "vmc_link_live_preview", True))
+    lock_to_center = bool(getattr(scene, "vmc_link_lock_to_center", True))
     use_arkit_face = is_arkit_face_source_enabled(scene)
 
     if arm is preview_arm:
@@ -867,7 +924,8 @@ def apply_timer():
         state.dirty = False
     _ensure_preview_cache_targets(preview_arm, preview_face)
 
-    _apply_preview_armature(preview_arm, root, waist, bones, blends)
+    preview_context = _ensure_receiver_preview_context(scene, preview_arm)
+    _apply_preview_armature(preview_arm, root, waist, bones, blends, lock_to_center, preview_context)
     if use_arkit_face:
         _apply_preview_face(preview_face, arkit_blends)
 
@@ -889,7 +947,7 @@ def apply_timer():
 
     if arm is not None:
         target_context = _ensure_receiver_target_context(scene, arm, preview_arm)
-        _apply_target_root_motion(arm, root, waist, target_context)
+        _apply_target_root_motion(arm, root, waist, bones, target_context, lock_to_center)
 
         if target_context.get("is_arp") and mapping.has_pose_bones(preview_arm):
             driven_bones.update(_apply_arp_target_armature(scene, arm, preview_arm, target_context))

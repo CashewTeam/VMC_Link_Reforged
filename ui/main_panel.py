@@ -49,6 +49,7 @@ def draw_main_panel(layout, context):
         col.prop(scene, "vmc_link_arkit_port")
     col.prop(scene, "vmc_link_rate_hz")
     col.prop(scene, "vmc_link_live_preview")
+    col.prop(scene, "vmc_link_lock_to_center")
 
     layout.separator()
     layout.label(text="目标对象", icon="OUTLINER_OB_ARMATURE")

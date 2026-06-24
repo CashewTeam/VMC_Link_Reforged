@@ -39,6 +39,7 @@ receiver_session_active = False
 receiver_paused = False
 receiver_armature_snapshots = []
 receiver_face_snapshots = []
+receiver_preview_context = {}
 receiver_target_context = {}
 
 
@@ -69,9 +70,10 @@ def reset_runtime_buffers():
 
 def reset_receiver_session_state():
     global receiver_session_active, receiver_paused
-    global receiver_armature_snapshots, receiver_face_snapshots, receiver_target_context
+    global receiver_armature_snapshots, receiver_face_snapshots, receiver_preview_context, receiver_target_context
     receiver_session_active = False
     receiver_paused = False
     receiver_armature_snapshots = []
     receiver_face_snapshots = []
+    receiver_preview_context = {}
     receiver_target_context = {}

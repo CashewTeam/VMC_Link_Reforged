@@ -110,6 +110,7 @@ FIXED_SCENE_PROPS = (
     "vmc_link_bind_address_custom",
     "vmc_link_rate_hz",
     "vmc_link_live_preview",
+    "vmc_link_lock_to_center",
     "vmc_link_face_source",
     "vmc_link_arkit_port",
     "vmc_link_armature",
@@ -168,6 +169,12 @@ def ensure_scene_props():
     scene_type.vmc_link_live_preview = bpy.props.BoolProperty(
         name="实时驱动目标对象",
         description="是否将接收数据实时写入映射后的目标骨架和目标面部",
+        default=True,
+        update=_on_live_preview_changed,
+    )
+    scene_type.vmc_link_lock_to_center = bpy.props.BoolProperty(
+        name="固定角色到中心",
+        description="勾选时忽略 VMC 根位移，只在场景中心预览/驱动；取消勾选后按 VMC Root、Tra 或 Hips 位置移动角色",
         default=True,
         update=_on_live_preview_changed,
     )
