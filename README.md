@@ -2,7 +2,7 @@
 
 面向 Blender 的实时动捕接收插件。
 
-当前版本：`0.12.3`
+当前版本：`0.12.4`
 
 项目当前重点不是做“任意来源一键适配任意骨架”，而是先把一条稳定、可调试、可扩展的实时驱动链路固化下来。现在这条链路已经明确拆成两部分：
 
@@ -247,15 +247,20 @@ presets/
 近期已经对实时预览链路做过一轮性能优化：
 
 - 不再每个接收周期强制重绘整个 `VIEW_3D`
-- 只刷新 UI 区域
-- UI 刷新做了节流
-- 预览骨架和预览面部增加了独立缓存，避免每帧重复做名字匹配
+- UI 刷新做了节流，数据预览默认折叠
+- 预览骨架和预览面部增加独立缓存，避免每帧重复做名字匹配
+- UDP 收包与 OSC 解码已移到后台线程
+- 主线程只复制最新一帧数据，并执行必要的 Blender RNA 写入
+- ARP 运行时缓存骨引用、映射表和 T Pose / A Pose 校准结果
+- ARP 目标骨架改为局部旋转提交，跳过未变化骨骼
+- 每帧运行时不主动调用 `view_layer.update()`，避免插件额外强制依赖图求值
 
 当前如果视口性能仍有瓶颈，优先需要继续排查的是：
 
 - 高骨骼数目标骨架的实时驱动成本
 - 大量 Shape Key 目标面部的实时写入成本
 - 数据预览面板展开时的文本绘制成本
+- 是否需要给目标层增加独立的驱动频率上限，避免目标骨架每个接收帧都触发完整姿态求值
 
 ## 当前边界
 
@@ -268,32 +273,58 @@ presets/
 
 ## 当前代码结构
 
-- [__init__.py](./__init__.py)
-  - 插件入口、版本信息、面板入口
-- [core/bootstrap.py](./core/bootstrap.py)
-  - 模块装配与注册
-- [core/constants.py](./core/constants.py)
-  - 默认值、枚举、ARKit 52 Key、集合名等常量
-- [runtime/properties.py](./runtime/properties.py)
+插件目录已经从根目录单文件模块调整为分层包结构：
+
+```text
+vmc_link/
+  __init__.py
+  blender_manifest.toml
+  assets/
+  core/
+  mapping/
+  presets/
+  preview/
+  runtime/
+  ui/
+  wheels/
+```
+
+主要职责划分：
+
+- `__init__.py`
+  - Blender 插件入口、版本信息、依赖检查和主面板壳
+- `core/bootstrap.py`
+  - 模块装配、注册 / 反注册、UI 委托
+- `core/constants.py`
+  - 默认值、枚举、ARKit 52 Key、集合名、骨骼别名
+- `core/helpers.py`
+  - 名称规范化、矩阵 / 四元数工具、Shape Key 工具
+- `core/state.py`
+  - 运行时缓存、接收线程句柄、线程锁、调试状态
+- `runtime/properties.py`
   - Scene 属性注册、兼容迁移、load_post 迁移钩子
-- [runtime/network.py](./runtime/network.py)
-  - UDP 接收器、dispatcher、原始缓存更新
-- [runtime/driver.py](./runtime/driver.py)
-  - 预览层驱动、目标层驱动、录制、UI 刷新控制
-- [mapping/mapper.py](./mapping/mapper.py)
-  - 别名匹配、手动映射、缓存重建
-- [mapping/preset_store.py](./mapping/preset_store.py)
-  - 三套 JSON 预设
-- [preview/dummy_vrm.py](./preview/dummy_vrm.py)
-  - 预览骨架创建 / 重建、ARKit 调试面部导入、插件集合管理
-- [ui/main_panel.py](./ui/main_panel.py)
-  - 主面板
-- [ui/intermediate_panel.py](./ui/intermediate_panel.py)
-  - 中间层预览面板
-- [ui/mapping_panel.py](./ui/mapping_panel.py)
-  - 映射面板
-- [ui/preview_panel.py](./ui/preview_panel.py)
-  - 底部折叠式数据预览面板
+- `runtime/network.py`
+  - UDP 接收器、OSC dispatcher、后台收包线程、原始缓存更新
+- `runtime/driver.py`
+  - 接收定时器、预览层驱动、目标层驱动、录制、暂停 / 停止恢复
+- `mapping/mapper.py`
+  - 通用骨骼 / 表情映射、别名匹配、缓存重建
+- `mapping/arp.py`
+  - Auto Rig Pro 检测、标准 FK 映射、校验、运行时映射生成、T/A 姿态校准
+- `mapping/preset_store.py`
+  - JSON 预设扫描、加载、保存
+- `preview/dummy_vrm.py`
+  - VRM 预览骨架创建 / 重建、ARKit 调试面部导入、`VMC_Link` 集合管理
+- `ui/main_panel.py`
+  - 接收器配置、暂停 / 继续 / 停止、目标对象绑定
+- `ui/intermediate_panel.py`
+  - 中间层预览对象状态、VRM / ARKit 创建入口
+- `ui/mapping_panel.py`
+  - 骨骼映射、表情映射、ARP 辅助区、预设入口
+- `ui/preview_panel.py`
+  - 底部折叠式 VMC / ARKit 数据预览
+- `ui/operators.py`
+  - UI 操作符、预设操作、ARP 操作、中间层操作
 
 ## 下一阶段重点
 
@@ -310,7 +341,7 @@ presets/
 
 下一阶段的重点应转向：
 
-- `VRM 中间层 -> Auto Rig Pro` 骨架适配
+- `VRM 中间层 -> Auto Rig Pro` 的生产级调试与性能收敛
 - `ARKit 52 Key -> MMD Shape Key` 面部适配
 - 面向实际目标模型的 built-in 预设
 - 映射完整性诊断与调试工具
