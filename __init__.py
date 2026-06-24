@@ -1,13 +1,13 @@
-# VMC Link - configurable OSC/VMC receiver for Blender
+# VMC_Link_Reforged - configurable OSC/VMC receiver for Blender
 #
 # This project was originally inspired by HEVA Portal by ScaledTeam.
 # https://github.com/scaledteam/HEVA_Portal
 
 # Legacy
 bl_info = {
-    "name": "VMC Link",
+    "name": "VMC_Link_Reforged",
     "author": "Internet Addict",
-    "version": (0, 16, 2),
+    "version": (0, 17, 0),
     "blender": (4, 2, 0),
     "location": "3D 视图 > 侧边栏 > VMC Link",
     "description": "接收 VMC 与 RhyLive ARKit OSC，预览原始数据，并管理映射预设",

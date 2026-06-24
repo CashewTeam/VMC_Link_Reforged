@@ -1,8 +1,12 @@
-# VMC Link
+# VMC_Link_Reforged
 
 面向 Blender 的实时 VMC / RhyLive ARKit 动捕接收、预览和目标映射插件。
 
-当前版本：`0.16.2`
+当前阶段：`Alpha`
+
+当前版本：`0.17.0`
+
+项目名：`VMC_Link_Reforged`
 
 项目当前目标是把“原始接收数据 -> 稳定中间层预览 -> 可替换目标映射 -> Blender 录制”这条链路做成可调试、可扩展、可生产验证的工作流。
 
@@ -194,6 +198,34 @@ vmc_link/
   presets/                 # 内建 / 用户映射预设
   wheels/                  # 打包依赖
 ```
+
+## 打包与发布
+
+- 当前项目仍处于 `Alpha` 小范围测试阶段。
+- 对外分发的 Blender 5.1 扩展包命名固定为：
+  - `VMC_Link_Reforged_Alpha_<版本号>_For5.1.zip`
+- 版本号取 `blender_manifest.toml` 与 `__init__.py` 中一致的插件版本号。
+- 打包时必须保证 `blender_manifest.toml` 位于 zip 根目录，不能再额外包一层外部文件夹。
+- 打包内容只包含扩展本体文件与运行依赖，排除本地参考资料和打包垃圾文件。
+- 默认纳入：
+  - `__init__.py`
+  - `blender_manifest.toml`
+  - `README.md`
+  - `assets/`
+  - `core/`
+  - `mapping/`
+  - `presets/`
+  - `preview/`
+  - `runtime/`
+  - `ui/`
+  - `wheels/`
+- 必须排除：
+  - `.git`
+  - `__pycache__/`
+  - `.DS_Store`
+  - `RhyLiveSDK_Unity-main/`
+  - 已生成的 `*.zip`
+- 当前扩展内部 `id` 仍保持为 `vmc_link`，以避免打破现有测试安装的升级路径。
 
 ## 下一步
 
