@@ -10,6 +10,20 @@ from ..runtime import driver as runtime
 from ..runtime import network
 
 
+def _ensure_target_rig_type(scene, rig_type: str):
+    current = str(getattr(scene, "vmc_link_target_rig_type", "")).strip().upper()
+    wanted = str(rig_type).strip().upper()
+    if current == wanted:
+        return
+    scene.vmc_link_target_rig_type = wanted
+
+
+def _finalize_mapping_update(scene):
+    mapping.rebuild_maps(scene)
+    runtime.refresh_receiver_target_context(scene)
+    runtime.tag_view3d_ui_redraw()
+
+
 class VMC_LINK_OT_toggle_receiver(bpy.types.Operator):
     bl_idname = "vmc_link.toggle_receiver"
     bl_label = "切换接收器"
@@ -122,6 +136,7 @@ class VMC_LINK_OT_load_mapping_preset(bpy.types.Operator):
         kind = str(self.mapping_kind)
         try:
             file_name = presets.load_mapping_preset(context.scene, kind)
+            _finalize_mapping_update(context.scene)
             self.report({"INFO"}, f"已加载 {mapping.mapping_kind_label(kind)} 预设：{file_name}")
         except Exception as exc:
             self.report({"ERROR"}, str(exc))
@@ -194,15 +209,17 @@ class VMC_LINK_OT_inspect_arp_rig(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         analysis = mapping_arp.analyze_armature(getattr(scene, "vmc_link_armature", None))
-        report_lines = mapping_arp.inspect_report_lines(analysis)
-        mapping_arp.store_scene_report(scene, "ARP 骨架检查", report_lines, analysis["is_arp"])
         if not analysis["is_target_valid"]:
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not analysis["is_arp"]:
+            report_lines = mapping_arp.inspect_report_lines(analysis)
+            mapping_arp.store_scene_report(scene, "ARP 骨架检查", report_lines, analysis["is_arp"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "ARP"
+        _ensure_target_rig_type(scene, "ARP")
+        report_lines = mapping_arp.inspect_report_lines(analysis)
+        mapping_arp.store_scene_report(scene, "ARP 骨架检查", report_lines, analysis["is_arp"])
         self.report({"INFO"}, f"ARP 骨架检查通过：{analysis['target_name']}")
         return {"FINISHED"}
 
@@ -214,15 +231,17 @@ class VMC_LINK_OT_inspect_vrm_rig(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         analysis = mapping_vrm.analyze_armature(getattr(scene, "vmc_link_armature", None))
-        report_lines = mapping_vrm.inspect_report_lines(analysis)
-        mapping_vrm.store_scene_report(scene, "VRM / 通用骨架检查", report_lines, analysis["is_vrm"])
         if not analysis["is_target_valid"]:
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not analysis["is_vrm"]:
+            report_lines = mapping_vrm.inspect_report_lines(analysis)
+            mapping_vrm.store_scene_report(scene, "VRM / 通用骨架检查", report_lines, analysis["is_vrm"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 VRM / 通用 humanoid 骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "GENERIC"
+        _ensure_target_rig_type(scene, "GENERIC")
+        report_lines = mapping_vrm.inspect_report_lines(analysis)
+        mapping_vrm.store_scene_report(scene, "VRM / 通用骨架检查", report_lines, analysis["is_vrm"])
         self.report({"INFO"}, "VRM / 通用骨架检查通过")
         return {"FINISHED"}
 
@@ -239,9 +258,10 @@ class VMC_LINK_OT_autofill_vrm_bone_map(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
+        _ensure_target_rig_type(scene, "GENERIC")
         report_lines = mapping_vrm.autofill_report_lines(result)
         mapping_vrm.store_scene_report(scene, "VRM 自动填充", report_lines, result["analysis"]["is_vrm"])
-        scene.vmc_link_target_rig_type = "GENERIC"
+        _finalize_mapping_update(scene)
         self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 VRM 映射")
         return {"FINISHED"}
 
@@ -259,9 +279,13 @@ class VMC_LINK_OT_validate_vrm_bone_map(bpy.types.Operator):
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not validation["is_vrm"]:
+            report_lines = mapping_vrm.validation_report_lines(validation)
+            mapping_vrm.store_scene_report(scene, "VRM 映射校验", report_lines, validation["is_vrm"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 VRM / 通用 humanoid 骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "GENERIC"
+        _ensure_target_rig_type(scene, "GENERIC")
+        report_lines = mapping_vrm.validation_report_lines(validation)
+        mapping_vrm.store_scene_report(scene, "VRM 映射校验", report_lines, validation["is_vrm"])
         self.report({"INFO"}, "已完成 VRM / 通用骨架映射校验")
         return {"FINISHED"}
 
@@ -278,9 +302,10 @@ class VMC_LINK_OT_autofill_arp_bone_map(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
+        _ensure_target_rig_type(scene, "ARP")
         report_lines = mapping_arp.autofill_report_lines(result)
         mapping_arp.store_scene_report(scene, "ARP 自动填充", report_lines, result["analysis"]["is_arp"])
-        scene.vmc_link_target_rig_type = "ARP"
+        _finalize_mapping_update(scene)
         self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 ARP 映射")
         return {"FINISHED"}
 
@@ -292,15 +317,17 @@ class VMC_LINK_OT_validate_arp_bone_map(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         validation = mapping_arp.validate_scene_mapping(scene)
-        report_lines = mapping_arp.validation_report_lines(validation)
-        mapping_arp.store_scene_report(scene, "ARP 映射校验", report_lines, validation["is_arp"])
         if not validation["is_target_valid"]:
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not validation["is_arp"]:
+            report_lines = mapping_arp.validation_report_lines(validation)
+            mapping_arp.store_scene_report(scene, "ARP 映射校验", report_lines, validation["is_arp"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "ARP"
+        _ensure_target_rig_type(scene, "ARP")
+        report_lines = mapping_arp.validation_report_lines(validation)
+        mapping_arp.store_scene_report(scene, "ARP 映射校验", report_lines, validation["is_arp"])
         self.report({"INFO"}, "已完成 ARP 映射校验")
         return {"FINISHED"}
 
@@ -312,15 +339,18 @@ class VMC_LINK_OT_inspect_mmd_rig(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         analysis = mapping_mmd.analyze_armature(getattr(scene, "vmc_link_armature", None))
-        report_lines = mapping_mmd.inspect_report_lines(analysis)
-        mapping_mmd.store_scene_report(scene, "MMD 骨架检查", report_lines, analysis["is_mmd"])
         if not analysis["is_target_valid"]:
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not analysis["is_mmd"]:
+            report_lines = mapping_mmd.inspect_report_lines(analysis)
+            mapping_mmd.store_scene_report(scene, "MMD 骨架检查", report_lines, analysis["is_mmd"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 MMD 标准骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "MMD"
+        _ensure_target_rig_type(scene, "MMD")
+        report_lines = mapping_mmd.inspect_report_lines(analysis)
+        mapping_mmd.store_scene_report(scene, "MMD 骨架检查", report_lines, analysis["is_mmd"])
+        runtime.refresh_receiver_target_context(scene)
         self.report({"INFO"}, "MMD 骨架检查通过")
         return {"FINISHED"}
 
@@ -337,10 +367,11 @@ class VMC_LINK_OT_autofill_mmd_bone_map(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
+        _ensure_target_rig_type(scene, "MMD")
         report_lines = mapping_mmd.autofill_report_lines(result)
         mapping_mmd.store_scene_report(scene, "MMD 自动填充", report_lines, result["analysis"]["is_mmd"])
-        scene.vmc_link_target_rig_type = "MMD"
-        self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 MMD 映射")
+        _finalize_mapping_update(scene)
+        self.report({"INFO"}, f"已重建 {len(result['written'])} 项标准 MMD 映射")
         return {"FINISHED"}
 
 
@@ -351,15 +382,18 @@ class VMC_LINK_OT_validate_mmd_bone_map(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         validation = mapping_mmd.validate_scene_mapping(scene)
-        report_lines = mapping_mmd.validation_report_lines(validation)
-        mapping_mmd.store_scene_report(scene, "MMD 映射校验", report_lines, validation["is_mmd"])
         if not validation["is_target_valid"]:
             self.report({"ERROR"}, "请先绑定目标骨架")
             return {"CANCELLED"}
         if not validation["is_mmd"]:
+            report_lines = mapping_mmd.validation_report_lines(validation)
+            mapping_mmd.store_scene_report(scene, "MMD 映射校验", report_lines, validation["is_mmd"])
             self.report({"ERROR"}, "当前目标骨架不是可识别的 MMD 标准骨架")
             return {"CANCELLED"}
-        scene.vmc_link_target_rig_type = "MMD"
+        _ensure_target_rig_type(scene, "MMD")
+        report_lines = mapping_mmd.validation_report_lines(validation)
+        mapping_mmd.store_scene_report(scene, "MMD 映射校验", report_lines, validation["is_mmd"])
+        runtime.refresh_receiver_target_context(scene)
         self.report({"INFO"}, "已完成 MMD 映射校验")
         return {"FINISHED"}
 

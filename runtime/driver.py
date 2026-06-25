@@ -20,7 +20,6 @@ RECORDING_BAKE_MAX_CLEAR_KEYS_PER_TICK = 192
 RECORDING_BAKE_TIMER_INTERVAL_SEC = 0.001
 IDLE_UI_REDRAW_INTERVAL_SEC = 1.0
 
-
 def is_recording() -> bool:
     return state.recording
 
@@ -634,63 +633,8 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
             if center_bone is not None:
                 context["mmd_center_bone"] = center_bone
                 context["mmd_center_start_location"] = center_bone.location.copy()
-            if mapping.has_pose_bones(preview_arm):
-                runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
-                entries = []
-                for source_name, target_name in runtime_map.items():
-                    source_bone = preview_arm.pose.bones.get(source_name)
-                    target_bone = arm_obj.pose.bones.get(target_name)
-                    if source_bone is None or target_bone is None:
-                        continue
-                    source_rest = source_bone.bone.matrix_local.to_quaternion()
-                    target_rest = target_bone.bone.matrix_local.to_quaternion()
-                    source_rest.normalize()
-                    target_rest.normalize()
-                    source_rest_inv = source_rest.inverted()
-                    target_rest_inv = target_rest.inverted()
-                    context["preview_rest_rotations"][source_name] = source_rest.copy()
-                    context["preview_rest_inverse_rotations"][source_name] = source_rest_inv.copy()
-                    context["target_rest_rotations"][target_bone.name] = target_rest.copy()
-                    context["target_rest_inverse_rotations"][target_bone.name] = target_rest_inv.copy()
-                    if source_name == "LeftEye":
-                        context["eye_left_name"] = target_bone.name
-                    elif source_name == "RightEye":
-                        context["eye_right_name"] = target_bone.name
-                    source_start_basis_rotation = source_bone.matrix_basis.to_quaternion()
-                    target_start_basis_rotation = target_bone.matrix_basis.to_quaternion()
-                    source_start_basis_rotation.normalize()
-                    target_start_basis_rotation.normalize()
-                    source_start_basis_rotation_inv = source_start_basis_rotation.inverted()
-                    context["preview_start_basis_rotations"][source_name] = source_start_basis_rotation.copy()
-                    context["target_start_basis_rotations"][target_name] = target_start_basis_rotation.copy()
-                    source_start_rotation = source_bone.matrix.to_quaternion()
-                    target_start_rotation = target_bone.matrix.to_quaternion()
-                    source_start_rotation.normalize()
-                    target_start_rotation.normalize()
-                    context["preview_start_rotations"][source_name] = source_start_rotation.copy()
-                    context["target_start_rotations"][target_name] = target_start_rotation.copy()
-                    context["target_start_locations"][target_name] = target_bone.matrix.to_translation()
-                    context["target_start_scales"][target_name] = target_bone.matrix.to_scale()
-                    entries.append(
-                        (
-                            source_name,
-                            target_name,
-                            source_bone,
-                            target_bone,
-                            source_rest.copy(),
-                            source_rest_inv.copy(),
-                            target_rest.copy(),
-                            target_rest_inv.copy(),
-                            source_start_basis_rotation.copy(),
-                            source_start_basis_rotation_inv.copy(),
-                            target_start_basis_rotation.copy(),
-                        )
-                    )
-                context["mmd_runtime_entries"] = tuple(entries)
-                context["mmd_runtime_entries_by_source"] = {
-                    entry[0]: entry
-                    for entry in context["mmd_runtime_entries"]
-                }
+            context["mmd_runtime_entries"] = context.get("generic_runtime_entries", ())
+            context["mmd_runtime_entries_by_source"] = context.get("generic_runtime_entries_by_source", {})
         return context
 
     context["target_rig"] = mapping_target_rig.TARGET_RIG_ARP
@@ -864,6 +808,19 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
             entry[0]: entry
             for entry in context["arp_runtime_entries"]
         }
+    return context
+
+
+def refresh_receiver_target_context(scene):
+    arm_obj = getattr(scene, "vmc_link_armature", None)
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    if not mapping.has_pose_bones(arm_obj):
+        state.receiver_target_context = {}
+        return {}
+    if not state.cached_bone_map:
+        mapping.rebuild_maps(scene)
+    context = _build_receiver_target_context(scene, arm_obj, preview_arm)
+    state.receiver_target_context = context
     return context
 
 

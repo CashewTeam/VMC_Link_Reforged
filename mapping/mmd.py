@@ -285,6 +285,7 @@ def validate_scene_mapping(scene):
         "groups": {},
         "invalid_targets": [],
         "mismatched_defaults": [],
+        "stale_overrides": [],
         "duplicate_targets": [],
     }
     if not analysis["is_target_valid"]:
@@ -340,6 +341,7 @@ def validate_scene_mapping(scene):
         expected = resolved_defaults.get(source_key, MMD_DEFAULT_BONE_TARGETS.get(source_key))
         if expected is not None and target_key != expected:
             validation["mismatched_defaults"].append(f"{source_key} -> {target_name}，应为 {expected}")
+            validation["stale_overrides"].append(f"{source_key}: 当前 {target_name}，应为 {expected}")
 
     validation["invalid_targets"] = invalid_targets
     validation["duplicate_targets"] = [
@@ -359,14 +361,11 @@ def apply_standard_scene_mapping(scene):
         raise RuntimeError("当前目标骨架不是可识别的 MMD 标准骨架")
 
     resolved_defaults = analysis["resolved_default_targets"]
+    previous_entries = mapping.collect_mapping_entries(scene, "bone")
+    mapping.clear_mapping_overrides(scene, "bone")
     written = []
-    skipped = []
     unresolved = []
     for source_key in MMD_DEFAULT_BONE_TARGETS:
-        current = mapping.get_mapping_override(scene, "bone", source_key)
-        if current:
-            skipped.append(f"{source_key} -> {current}")
-            continue
         actual_name = resolved_defaults.get(source_key)
         if actual_name is None:
             unresolved.append(source_key)
@@ -377,8 +376,8 @@ def apply_standard_scene_mapping(scene):
     mapping.invalidate_bone_map_cache()
     return {
         "analysis": analysis,
+        "cleared": len(previous_entries),
         "written": written,
-        "skipped": skipped,
         "unresolved": unresolved,
         "validation": validate_scene_mapping(scene),
     }
@@ -455,8 +454,8 @@ def validation_report_lines(validation: dict):
         if group["invalid"]:
             lines.append(f"{label}无效: {', '.join(group['invalid'][:4])}")
     if validation["mismatched_defaults"]:
-        lines.append(f"非标准 MMD 目标: {len(validation['mismatched_defaults'])}")
-        lines.append("错误目标: " + ", ".join(validation["mismatched_defaults"][:4]))
+        lines.append(f"残留错误映射: {len(validation['mismatched_defaults'])}")
+        lines.append("错误项: " + ", ".join(validation["stale_overrides"][:4]))
     if validation["duplicate_targets"]:
         lines.append(f"重复目标: {len(validation['duplicate_targets'])}")
         lines.append("重复项: " + ", ".join(validation["duplicate_targets"][:4]))
@@ -465,14 +464,12 @@ def validation_report_lines(validation: dict):
 
 def autofill_report_lines(result: dict):
     lines = [
+        f"已清空旧映射: {int(result.get('cleared', 0))}",
         f"新写入映射: {len(result['written'])}",
-        f"保留已有映射: {len(result['skipped'])}",
         f"无法解析项: {len(result['unresolved'])}",
     ]
     if result["written"]:
         lines.append("已写入: " + ", ".join(result["written"][:6]))
-    if result["skipped"]:
-        lines.append("已保留: " + ", ".join(result["skipped"][:6]))
     if result["unresolved"]:
         lines.append("未解析: " + ", ".join(result["unresolved"][:8]))
     lines.extend(validation_report_lines(result["validation"]))
