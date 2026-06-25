@@ -360,8 +360,8 @@ def _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, b
             )
         else:
             entry_iter = (
-                (vmc_name, pose_bone, target_rest, target_rest_inv, bones.get(vmc_name))
-                for vmc_name, pose_bone, target_rest, target_rest_inv in runtime_entries
+                (vmc_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv, bones.get(vmc_name))
+                for vmc_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv in runtime_entries
             )
     else:
         entry_iter = []
@@ -371,16 +371,25 @@ def _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, b
                 continue
             state.cached_bone_map[vmc_name] = actual
             pose_bone = pose[actual]
+            source_rest = None
+            source_rest_inv = None
             target_rest = pose_bone.bone.matrix_local.to_quaternion()
             target_rest.normalize()
-            entry_iter.append((vmc_name, pose_bone, target_rest, target_rest.inverted(), raw))
+            entry_iter.append((vmc_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest.inverted(), raw))
 
-    for vmc_name, pose_bone, target_rest, target_rest_inv, raw in entry_iter:
+    for vmc_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv, raw in entry_iter:
         if raw is None:
             continue
         px, py, pz, qx, qy, qz, qw = raw
         rotate_quat = helpers.convert_vmc_quaternion(qx, qy, qz, qw)
-        local_q = target_rest_inv @ rotate_quat @ target_rest
+        if source_rest is not None and source_rest_inv is not None:
+            source_local = source_rest_inv @ rotate_quat @ source_rest
+            source_local.normalize()
+            rest_delta = target_rest_inv @ source_rest
+            rest_delta.normalize()
+            local_q = rest_delta @ source_local @ rest_delta.inverted()
+        else:
+            local_q = target_rest_inv @ rotate_quat @ target_rest
         local_q.normalize()
 
         bone_sample = _ensure_bone_sample(sample, pose_bone)
@@ -684,7 +693,11 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
             continue
         _px, _py, _pz, qx, qy, qz, qw = raw_pose
         desired_rotation = helpers.convert_vmc_quaternion(qx, qy, qz, qw)
-        desired_rotation = target_rest_inv @ desired_rotation @ target_rest
+        source_local = _source_rest_inv @ desired_rotation @ _source_rest
+        source_local.normalize()
+        rest_delta = target_rest_inv @ _source_rest
+        rest_delta.normalize()
+        desired_rotation = rest_delta @ source_local @ rest_delta.inverted()
         desired_rotation.normalize()
         desired_rotation = _filter_rotation(filtered_rotations, target_name, desired_rotation)
         bone_sample = _ensure_bone_sample(sample, target_bone)

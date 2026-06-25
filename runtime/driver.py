@@ -610,17 +610,25 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
                 target_rest = pose_bone.bone.matrix_local.to_quaternion()
                 target_rest.normalize()
                 target_rest_inv = target_rest.inverted()
+                source_rest = None
+                source_rest_inv = None
+                if mapping.has_pose_bones(preview_arm):
+                    source_bone = preview_arm.pose.bones.get(source_name)
+                    if source_bone is not None:
+                        source_rest = source_bone.bone.matrix_local.to_quaternion()
+                        source_rest.normalize()
+                        source_rest_inv = source_rest.inverted()
                 context["target_rest_rotations"][pose_bone.name] = target_rest.copy()
                 context["target_rest_inverse_rotations"][pose_bone.name] = target_rest_inv.copy()
-                runtime_entries.append((source_name, pose_bone, target_rest, target_rest_inv))
+                runtime_entries.append((source_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv))
                 if source_name == "LeftEye":
                     context["eye_left_name"] = actual_name
                 elif source_name == "RightEye":
                     context["eye_right_name"] = actual_name
             context["generic_runtime_entries"] = tuple(runtime_entries)
             context["generic_runtime_entries_by_source"] = {
-                source_name: (source_name, pose_bone, target_rest, target_rest_inv)
-                for source_name, pose_bone, target_rest, target_rest_inv in context["generic_runtime_entries"]
+                source_name: (source_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv)
+                for source_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv in context["generic_runtime_entries"]
             }
         if context["target_runtime_strategy"] == mapping_target_rig.RUNTIME_STRATEGY_MMD and mapping.has_pose_bones(arm_obj):
             center_bone = arm_obj.pose.bones.get("センター")
@@ -926,7 +934,7 @@ def _ensure_target_runtime_rotation_modes(arm_obj, context):
                 if pose_bone is not None:
                     driven_pose_bones[pose_bone.name] = pose_bone
     else:
-        for _source_name, pose_bone, _target_rest, _target_rest_inv in context.get("generic_runtime_entries", ()):
+        for _source_name, pose_bone, _source_rest, _source_rest_inv, _target_rest, _target_rest_inv in context.get("generic_runtime_entries", ()):
             if pose_bone is not None:
                 driven_pose_bones[pose_bone.name] = pose_bone
 

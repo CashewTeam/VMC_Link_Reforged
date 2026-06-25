@@ -59,7 +59,7 @@ ARP_EYE_SOURCE_BONES = (
 )
 
 ARP_DEFAULT_BONE_TARGETS = {
-    "Hips": "c_root_bend.x",
+    "Hips": "c_root_master.x",
     "Spine": "c_spine_01.x",
     "Chest": "c_spine_02.x",
     "UpperChest": "c_spine_03.x",
@@ -424,11 +424,10 @@ def build_runtime_mapping(scene, arm_obj):
     runtime_map = {}
     used_targets = set()
     for source_key in ARP_RUNTIME_SOURCE_ORDER:
-        expected_target = analysis["resolved_default_targets"].get(source_key)
-        if expected_target is None:
-            continue
         configured_target = mapping.get_mapping_override(scene, constants.MAPPING_KIND_BONE, source_key)
-        if configured_target != expected_target or configured_target in used_targets:
+        if not configured_target:
+            configured_target = analysis["resolved_default_targets"].get(source_key, "")
+        if not configured_target or configured_target in used_targets:
             continue
         runtime_map[source_key] = configured_target
         used_targets.add(configured_target)
@@ -536,7 +535,7 @@ def prepare_receiver_session(scene):
     if not mapping.has_pose_bones(preview_arm) or "UpperChest" not in preview_arm.pose.bones:
         raise RuntimeError("ARP 驱动需要新版 VRM 预览骨架，请先点击“创建或重建 VRM 预览骨架”")
 
-    apply_standard_scene_mapping(scene)
+    mapping.invalidate_bone_map_cache()
     enable_fk_mode(arm_obj)
     enable_runtime_quaternion_mode(scene, arm_obj)
     return analysis
