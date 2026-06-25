@@ -195,6 +195,14 @@ ARP_RUNTIME_SOURCE_GROUPS = (
 
 ARP_ALLOWED_CONTROL_TARGETS = frozenset(ARP_DEFAULT_BONE_TARGETS.values())
 ARP_DELTA_ROTATION_SOURCE_BONES = frozenset()
+ARP_WORLD_ROTATION_SOURCE_BONES = frozenset((
+    "LeftUpperArm",
+    "RightUpperArm",
+    "LeftLowerArm",
+    "RightLowerArm",
+    "LeftHand",
+    "RightHand",
+))
 
 
 ARP_LOCAL_BASIS_DELTA_SOURCE_BONES = frozenset()
@@ -207,6 +215,10 @@ ARP_REST_AXIS_REMAP_SOURCE_BONES = frozenset(
 
 def uses_delta_rotation(source_name: str) -> bool:
     return source_name in ARP_DELTA_ROTATION_SOURCE_BONES
+
+
+def uses_world_rotation(source_name: str) -> bool:
+    return source_name in ARP_WORLD_ROTATION_SOURCE_BONES
 
 
 def uses_local_basis_delta(source_name: str) -> bool:

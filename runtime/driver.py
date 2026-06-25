@@ -586,6 +586,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
         "arp_copy_location_rules": {},
         "arp_target_pose_matrices": {},
         "arp_desired_target_matrices": {},
+        "use_preview_pose_world_sources": True,
         "target_rotation_modes_ready": False,
     }
     if context["target_start_world"] is not None:
@@ -1487,6 +1488,8 @@ def _process_recording_bake_prepare(session):
     arm = session.get("arm")
     preview_arm = session.get("preview_arm")
     session["target_context"] = _build_receiver_target_context(scene, arm, preview_arm) if arm is not None else None
+    if session["target_context"] is not None:
+        session["target_context"]["use_preview_pose_world_sources"] = False
     _switch_recording_bake_to_rebuild_phase(session)
     return True
 
@@ -2445,6 +2448,8 @@ def _rebuild_recording_tracks_from_raw_frames(scene):
         "last_written_frame": frame_start - 1,
         "interpolation_enabled": bool(state.recording_interpolation_enabled),
     }
+    if session["target_context"] is not None:
+        session["target_context"]["use_preview_pose_world_sources"] = False
 
     state.recording_last_sample = None
     _set_recording_progress(frame_start, frame_start - 1)
