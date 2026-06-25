@@ -135,6 +135,9 @@ FIXED_SCENE_PROPS = (
     "vmc_link_record_transition_frames",
     "vmc_link_bone_map_preset",
     "vmc_link_bone_map_save_name",
+    "vmc_link_vrm_is_detected",
+    "vmc_link_vrm_report_title",
+    "vmc_link_vrm_report",
     "vmc_link_vmc_blend_preset",
     "vmc_link_vmc_blend_save_name",
     "vmc_link_arkit_blend_preset",
@@ -290,6 +293,24 @@ def ensure_scene_props():
         name="保存名称",
         description="当前骨骼映射预设的文件名",
         default="",
+    )
+    scene_type.vmc_link_vrm_is_detected = bpy.props.BoolProperty(
+        name="VRM 识别结果",
+        description="最近一次 VRM / 通用骨架检查是否通过",
+        default=False,
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_vrm_report_title = bpy.props.StringProperty(
+        name="VRM 报告标题",
+        description="最近一次 VRM / 通用骨架检查报告标题",
+        default="",
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_vrm_report = bpy.props.StringProperty(
+        name="VRM 报告内容",
+        description="最近一次 VRM / 通用骨架检查报告内容",
+        default="",
+        options={"HIDDEN"},
     )
     scene_type.vmc_link_vmc_blend_preset = bpy.props.EnumProperty(
         name="预设",

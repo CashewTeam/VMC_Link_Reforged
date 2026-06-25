@@ -6,6 +6,7 @@ from ..mapping import mapper as mapping
 from ..mapping import mmd as mapping_mmd
 from ..mapping import preset_store as presets
 from ..mapping import target_rig as mapping_target_rig
+from ..mapping import vrm as mapping_vrm
 
 
 def draw_mapping_preset_controls(layout, scene, kind: str):
@@ -108,7 +109,7 @@ def draw_mmd_helper(layout, scene):
     col.label(text="MMD 辅助", icon="OUTLINER_OB_ARMATURE")
     col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_MMD).builtin_preset_file}", icon="INFO")
     col.label(text=f"默认名表: {len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
-    col.label(text="当前已接入 MMD 专用运行时入口", icon="INFO")
+    col.label(text="支持标准 MMD 骨名与 .L/.R 侧别名解析", icon="INFO")
     col.label(text="根位移写入 センター 骨，骨骼旋转按起始 pose delta + rest 轴重映射求值", icon="INFO")
 
     row = col.row(align=True)
@@ -127,6 +128,34 @@ def draw_mmd_helper(layout, scene):
     report_box = col.box()
     icon = "CHECKMARK" if bool(getattr(scene, "vmc_link_mmd_is_detected", False)) else "ERROR"
     report_box.label(text=report_title or "MMD 报告", icon=icon)
+    for line in report_text.splitlines():
+        report_box.label(text=_truncate_ui_line(line), icon="DOT")
+
+
+def draw_vrm_helper(layout, scene):
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text="VRM / 通用骨架辅助", icon="ARMATURE_DATA")
+    col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_GENERIC).builtin_preset_file}", icon="INFO")
+    col.label(text=f"默认名表: {len(mapping_vrm.VRM_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
+    col.label(text="目标预览和录制复用现有通用骨架链路", icon="INFO")
+
+    row = col.row(align=True)
+    row.operator("vmc_link.inspect_vrm_rig", text="检查 VRM 骨架", icon="VIEWZOOM")
+    row.operator("vmc_link.autofill_vrm_bone_map", text="应用标准 VRM 映射", icon="SHADERFX")
+
+    validate_row = col.row(align=True)
+    validate_row.operator("vmc_link.validate_vrm_bone_map", text="校验当前映射", icon="CHECKMARK")
+
+    report_title = str(getattr(scene, "vmc_link_vrm_report_title", "")).strip()
+    report_text = str(getattr(scene, "vmc_link_vrm_report", "")).strip()
+    if not report_text:
+        col.label(text="先绑定目标骨架，再执行检查、自动填充或校验", icon="INFO")
+        return
+
+    report_box = col.box()
+    icon = "CHECKMARK" if bool(getattr(scene, "vmc_link_vrm_is_detected", False)) else "ERROR"
+    report_box.label(text=report_title or "VRM 报告", icon=icon)
     for line in report_text.splitlines():
         report_box.label(text=_truncate_ui_line(line), icon="DOT")
 
@@ -164,9 +193,7 @@ class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
         elif rig_type == "MMD":
             draw_mmd_helper(layout, scene)
         else:
-            info_box = layout.box()
-            info_box.label(text="VRM / 通用骨架模式", icon="INFO")
-            info_box.label(text="当前显示通用骨骼映射与 JSON 预设")
+            draw_vrm_helper(layout, scene)
         draw_mapping_preset_controls(layout, scene, constants.MAPPING_KIND_BONE)
         draw_bone_mapping_entries(layout, scene)
 

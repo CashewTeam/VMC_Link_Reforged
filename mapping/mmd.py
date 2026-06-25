@@ -1,3 +1,4 @@
+from ..core import helpers
 from . import mapper as mapping
 
 
@@ -113,8 +114,58 @@ for side_suffix, side_label in (("L", "左"), ("R", "右")):
         MMD_DEFAULT_BONE_TARGETS[f"{finger_name}{joint_index}_{side_suffix}"] = f"{side_label}{target_name}"
 
 
+_MMD_SIDE_SUFFIX = {
+    "左": "L",
+    "右": "R",
+}
+
+_MMD_EXACT_ALIASES = {
+    "左目": ("目.L",),
+    "右目": ("目.R",),
+}
+
+
 def _has_pose_bones(obj) -> bool:
     return mapping.has_pose_bones(obj)
+
+
+def _unique_candidates(candidates):
+    seen = set()
+    unique = []
+    for candidate in candidates:
+        value = str(candidate).strip()
+        if not value:
+            continue
+        key = (value.lower(), helpers.normalize_bone_name(value))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return tuple(unique)
+
+
+def _candidate_bone_names(wanted: str):
+    raw = str(wanted).strip()
+    if not raw:
+        return ()
+
+    candidates = [raw]
+    candidates.extend(_MMD_EXACT_ALIASES.get(raw, ()))
+
+    if raw.startswith(("左", "右")) and len(raw) > 1:
+        side = raw[0]
+        base = raw[1:]
+        suffix = _MMD_SIDE_SUFFIX.get(side)
+        if suffix:
+            candidates.extend(
+                (
+                    f"{base}.{suffix}",
+                    f"{base}_{suffix}",
+                    f"{base}-{suffix}",
+                    f"{base}{suffix}",
+                )
+            )
+    return _unique_candidates(candidates)
 
 
 def _resolve_pose_bone_name(arm_obj, wanted: str):
@@ -122,14 +173,37 @@ def _resolve_pose_bone_name(arm_obj, wanted: str):
         return None
 
     pose_bones = arm_obj.pose.bones
-    if wanted in pose_bones:
-        return wanted
+    candidates = _candidate_bone_names(wanted)
+    normalized_candidates = {helpers.normalize_bone_name(candidate) for candidate in candidates}
 
-    wanted_lower = str(wanted).lower()
+    for candidate in candidates:
+        if candidate in pose_bones:
+            return candidate
+
+    lowered_candidates = {candidate.lower() for candidate in candidates}
     for bone in pose_bones:
-        if bone.name.lower() == wanted_lower:
+        if bone.name.lower() in lowered_candidates:
+            return bone.name
+
+    for bone in pose_bones:
+        if helpers.normalize_bone_name(bone.name) in normalized_candidates:
             return bone.name
     return None
+
+
+def _resolved_default_targets(arm_obj):
+    resolved = {}
+    unresolved = []
+    alias_hits = []
+    for source_key, wanted_target in MMD_DEFAULT_BONE_TARGETS.items():
+        actual = _resolve_pose_bone_name(arm_obj, wanted_target)
+        if actual is None:
+            unresolved.append(source_key)
+            continue
+        resolved[source_key] = actual
+        if actual != wanted_target:
+            alias_hits.append(f"{wanted_target} -> {actual}")
+    return resolved, unresolved, alias_hits
 
 
 def analyze_armature(arm_obj):
@@ -138,8 +212,12 @@ def analyze_armature(arm_obj):
         "is_mmd": False,
         "required_found": {},
         "required_missing": [],
+        "required_aliases": [],
         "optional_found": {},
         "optional_missing": {},
+        "resolved_default_targets": {},
+        "default_unresolved": [],
+        "default_aliases": [],
     }
     if not result["is_target_valid"]:
         return result
@@ -150,6 +228,8 @@ def analyze_armature(arm_obj):
             result["required_missing"].append(bone_name)
             continue
         result["required_found"][bone_name] = actual
+        if actual != bone_name:
+            result["required_aliases"].append(f"{bone_name} -> {actual}")
 
     for group_name, bone_names in MMD_OPTIONAL_TARGET_GROUPS.items():
         found = []
@@ -163,6 +243,10 @@ def analyze_armature(arm_obj):
         result["optional_found"][group_name] = tuple(found)
         result["optional_missing"][group_name] = tuple(missing)
 
+    resolved_default_targets, default_unresolved, default_aliases = _resolved_default_targets(arm_obj)
+    result["resolved_default_targets"] = resolved_default_targets
+    result["default_unresolved"] = default_unresolved
+    result["default_aliases"] = default_aliases
     result["is_mmd"] = not result["required_missing"]
     return result
 
@@ -234,7 +318,9 @@ def validate_scene_mapping(scene):
         "可选骨": ("UpperChest", "LeftToeBase", "RightToeBase"),
         "眼睛": ("LeftEye", "RightEye"),
         "手指": tuple(
-            key for key in MMD_DEFAULT_BONE_TARGETS if key.startswith(("Thumb", "IndexFinger", "MiddleFinger", "RingFinger", "LittleFinger"))
+            key
+            for key in MMD_DEFAULT_BONE_TARGETS
+            if key.startswith(("Thumb", "IndexFinger", "MiddleFinger", "RingFinger", "LittleFinger"))
         ),
     }
 
@@ -244,12 +330,15 @@ def validate_scene_mapping(scene):
         invalid_targets.extend(status["invalid"])
         validation["groups"][label] = status
 
+    resolved_defaults = analysis.get("resolved_default_targets", {})
     entries = mapping.collect_mapping_entries(scene, "bone")
     target_sources = {}
     for source_key, target_name in entries.items():
-        target_sources.setdefault(target_name, []).append(source_key)
-        expected = MMD_DEFAULT_BONE_TARGETS.get(source_key)
-        if expected is not None and target_name != expected:
+        actual_name = _resolve_pose_bone_name(arm_obj, target_name)
+        target_key = actual_name or target_name
+        target_sources.setdefault(target_key, []).append(source_key)
+        expected = resolved_defaults.get(source_key, MMD_DEFAULT_BONE_TARGETS.get(source_key))
+        if expected is not None and target_key != expected:
             validation["mismatched_defaults"].append(f"{source_key} -> {target_name}，应为 {expected}")
 
     validation["invalid_targets"] = invalid_targets
@@ -269,11 +358,16 @@ def apply_standard_scene_mapping(scene):
     if not analysis["is_mmd"]:
         raise RuntimeError("当前目标骨架不是可识别的 MMD 标准骨架")
 
-    mapping.clear_mapping_overrides(scene, "bone")
+    resolved_defaults = analysis["resolved_default_targets"]
     written = []
+    skipped = []
     unresolved = []
-    for source_key, target_name in MMD_DEFAULT_BONE_TARGETS.items():
-        actual_name = _resolve_pose_bone_name(arm_obj, target_name)
+    for source_key in MMD_DEFAULT_BONE_TARGETS:
+        current = mapping.get_mapping_override(scene, "bone", source_key)
+        if current:
+            skipped.append(f"{source_key} -> {current}")
+            continue
+        actual_name = resolved_defaults.get(source_key)
         if actual_name is None:
             unresolved.append(source_key)
             continue
@@ -284,7 +378,7 @@ def apply_standard_scene_mapping(scene):
     return {
         "analysis": analysis,
         "written": written,
-        "skipped": [],
+        "skipped": skipped,
         "unresolved": unresolved,
         "validation": validate_scene_mapping(scene),
     }
@@ -331,10 +425,16 @@ def inspect_report_lines(analysis: dict):
     lines = [
         f"MMD 识别: {'通过' if analysis['is_mmd'] else '失败'}",
         f"识别必需控制骨: {len(MMD_DETECTION_REQUIRED_TARGETS) - len(analysis['required_missing'])}/{len(MMD_DETECTION_REQUIRED_TARGETS)}",
-        f"默认可映射项: {len(MMD_DEFAULT_BONE_TARGETS)}",
+        f"默认可映射项: {len(analysis['resolved_default_targets'])}/{len(MMD_DEFAULT_BONE_TARGETS)}",
     ]
     if analysis["required_missing"]:
         lines.append("缺失识别骨: " + ", ".join(analysis["required_missing"][:8]))
+    if analysis["required_aliases"]:
+        lines.append("已解析侧别名: " + ", ".join(analysis["required_aliases"][:6]))
+    if analysis["default_aliases"]:
+        lines.append("默认映射别名命中: " + ", ".join(analysis["default_aliases"][:6]))
+    if analysis["default_unresolved"]:
+        lines.append("默认未解析项: " + ", ".join(analysis["default_unresolved"][:8]))
     for label, found in analysis["optional_found"].items():
         total = len(analysis["optional_found"].get(label, ())) + len(analysis["optional_missing"].get(label, ()))
         lines.append(f"{label}: {len(found)}/{total}")
@@ -371,6 +471,8 @@ def autofill_report_lines(result: dict):
     ]
     if result["written"]:
         lines.append("已写入: " + ", ".join(result["written"][:6]))
+    if result["skipped"]:
+        lines.append("已保留: " + ", ".join(result["skipped"][:6]))
     if result["unresolved"]:
         lines.append("未解析: " + ", ".join(result["unresolved"][:8]))
     lines.extend(validation_report_lines(result["validation"]))

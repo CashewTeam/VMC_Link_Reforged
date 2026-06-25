@@ -4,6 +4,7 @@ from ..mapping import arp as mapping_arp
 from ..mapping import mmd as mapping_mmd
 from ..mapping import mapper as mapping
 from ..mapping import preset_store as presets
+from ..mapping import vrm as mapping_vrm
 from ..preview import dummy_vrm
 from ..runtime import driver as runtime
 from ..runtime import network
@@ -206,6 +207,65 @@ class VMC_LINK_OT_inspect_arp_rig(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class VMC_LINK_OT_inspect_vrm_rig(bpy.types.Operator):
+    bl_idname = "vmc_link.inspect_vrm_rig"
+    bl_label = "检查 VRM 骨架"
+
+    def execute(self, context):
+        scene = context.scene
+        analysis = mapping_vrm.analyze_armature(getattr(scene, "vmc_link_armature", None))
+        report_lines = mapping_vrm.inspect_report_lines(analysis)
+        mapping_vrm.store_scene_report(scene, "VRM / 通用骨架检查", report_lines, analysis["is_vrm"])
+        if not analysis["is_target_valid"]:
+            self.report({"ERROR"}, "请先绑定目标骨架")
+            return {"CANCELLED"}
+        if not analysis["is_vrm"]:
+            self.report({"ERROR"}, "当前目标骨架不是可识别的 VRM / 通用 humanoid 骨架")
+            return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "GENERIC"
+        self.report({"INFO"}, "VRM / 通用骨架检查通过")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_autofill_vrm_bone_map(bpy.types.Operator):
+    bl_idname = "vmc_link.autofill_vrm_bone_map"
+    bl_label = "应用标准 VRM 映射"
+
+    def execute(self, context):
+        scene = context.scene
+        try:
+            result = mapping_vrm.autofill_scene_mapping(scene)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        report_lines = mapping_vrm.autofill_report_lines(result)
+        mapping_vrm.store_scene_report(scene, "VRM 自动填充", report_lines, result["analysis"]["is_vrm"])
+        scene.vmc_link_target_rig_type = "GENERIC"
+        self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 VRM 映射")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_validate_vrm_bone_map(bpy.types.Operator):
+    bl_idname = "vmc_link.validate_vrm_bone_map"
+    bl_label = "校验当前映射"
+
+    def execute(self, context):
+        scene = context.scene
+        validation = mapping_vrm.validate_scene_mapping(scene)
+        report_lines = mapping_vrm.validation_report_lines(validation)
+        mapping_vrm.store_scene_report(scene, "VRM 映射校验", report_lines, validation["is_vrm"])
+        if not validation["is_target_valid"]:
+            self.report({"ERROR"}, "请先绑定目标骨架")
+            return {"CANCELLED"}
+        if not validation["is_vrm"]:
+            self.report({"ERROR"}, "当前目标骨架不是可识别的 VRM / 通用 humanoid 骨架")
+            return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "GENERIC"
+        self.report({"INFO"}, "已完成 VRM / 通用骨架映射校验")
+        return {"FINISHED"}
+
+
 class VMC_LINK_OT_autofill_arp_bone_map(bpy.types.Operator):
     bl_idname = "vmc_link.autofill_arp_bone_map"
     bl_label = "应用标准 ARP 映射"
@@ -392,6 +452,9 @@ CLASSES = (
     VMC_LINK_OT_calibrate_dummy_armature_lengths,
     VMC_LINK_OT_import_arkit_preview_face,
     VMC_LINK_OT_rebuild_maps,
+    VMC_LINK_OT_inspect_vrm_rig,
+    VMC_LINK_OT_autofill_vrm_bone_map,
+    VMC_LINK_OT_validate_vrm_bone_map,
     VMC_LINK_OT_inspect_arp_rig,
     VMC_LINK_OT_autofill_arp_bone_map,
     VMC_LINK_OT_validate_arp_bone_map,

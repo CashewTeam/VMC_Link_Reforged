@@ -4,7 +4,7 @@
 
 当前阶段：`Alpha`
 
-当前版本：`0.31.0`
+当前版本：`0.33.0`
 
 项目名：`VMC_Link_Reforged`
 
@@ -18,7 +18,9 @@
 - RhyLive ARKit 52 Key 接收与 ARKit 调试面部预览。
 - 预览层与目标层解耦：预览层只用于查看原始输入，目标层按当前映射和目标骨架类型驱动。
 - VRM 预览骨架长度校准已从 ARP 专用逻辑中解耦，当前会按所选目标骨架类型识别并分发校准策略；`VRM / 通用骨架` 与 `Auto Rig Pro` 已接入。
+- `VRM / 通用骨架` 映射辅助已接入内建 `vrm_humanoid.json`、检查、应用标准映射和校验入口，目标预览与录制继续复用现有通用骨架链路。
 - Auto Rig Pro 目标骨架映射模块已进入可用阶段，支持检测、自动填充、校验、实时预览和录制回放，后续主要进入生产角色调优。
+- MMD 目标骨架适配已完成第一轮落地：支持标准名与 `.L/.R` 侧别名检测、自动填充和校验，当前 `Nagisa_arm` 测试骨架已识别通过。
 - MMD 形态键映射已具备基础可用状态，`presets/vmc_blend_maps/arona_vmc.json` 与 `presets/arkit_blend_maps/arona_arkit.json` 已通过实时预览验证。
 - 目标层录制已拆成独立面板，支持显式帧范围、清空范围关键帧、起始姿态过渡、原始帧缓存、停止后离线烘焙和状态栏保存进度。
 - 目标角色实时预览与录制已经开始共用 `TargetEvaluatedSample`，避免预览和录制走两套语义。
@@ -31,7 +33,7 @@
 - 录制功能仍需要真实 VMC / ARKit 接收流下的长时间回放验证。
 - ARP 后期编辑辅助待开发：把已录制 FK 腿部动作转换为 `c_foot_ik / c_leg_pole / c_toes_ik` 控制器关键帧，方便脚部 IK 手动修帧。
 - 映射模块解耦已完成第一阶段，但 UI 结构仍需要继续收敛成清晰的 `VRM / ARP / MMD` 多目标骨架工作流。
-- `VRM -> MMD` 目标骨架模块仍处于落地阶段：当前已有占位入口、默认名表和基础运行时分发，后续需要补齐真实 MMD 骨架检测、校准分支、轴向修正、手脚和手指细节。
+- MMD 目标骨架模块已进入第一轮可用阶段，后续主要补齐 MMD 专用校准分支、生产角色轴向细调和录制联调。
 - 尚未完成生产环境系统性验证和调试工具收敛。
 
 ## 运行链路
@@ -98,6 +100,7 @@ presets/
   - `Auto Rig Pro`
   - `MMD`
 - 内建预设：
+  - `presets/bone_maps/vrm_humanoid.json`
   - `presets/bone_maps/arp_fk_humanoid.json`
   - `presets/bone_maps/mmd_humanoid.json`
 - 已完成基础边界：
@@ -105,7 +108,7 @@ presets/
   - `mapping/mmd.py`
 - 后续目标：
   - 将 `VRM / 通用骨架` 产品化为一键匹配、校验和内建预设。
-  - 补齐 `VRM 中间层 -> MMD` 的检测、校准、轴向修正与角色差异。
+  - 补齐 `VRM 中间层 -> MMD` 的校准、轴向修正与角色差异。
   - 继续收敛 `VRM / ARP / MMD` 的 UI 边界。
   - 在真实角色上补齐生产调优。
 

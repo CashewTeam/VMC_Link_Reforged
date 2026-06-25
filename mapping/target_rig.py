@@ -2,6 +2,7 @@ from ..core import constants
 from . import arp as mapping_arp
 from . import mapper as mapping
 from . import mmd as mapping_mmd
+from . import vrm as mapping_vrm
 
 
 TARGET_RIG_GENERIC = "generic"
@@ -97,36 +98,34 @@ GENERIC_CALIBRATION_REQUIRED_SOURCES = (
 
 
 def _generic_resolved_targets(arm_obj, scene=None):
-    resolved = {}
-    if not mapping.has_pose_bones(arm_obj):
-        return resolved
+    analysis = mapping_vrm.analyze_armature(arm_obj)
+    resolved_targets = dict(analysis.get("resolved_default_targets", {}))
+    if not scene:
+        return resolved_targets
 
     for source_name in (*constants.INTERMEDIATE_REQUIRED_BONES, *constants.INTERMEDIATE_OPTIONAL_BONES):
         actual_name = mapping.find_bone_name(arm_obj, source_name, scene)
         if actual_name:
-            resolved[source_name] = actual_name
-    return resolved
+            resolved_targets[source_name] = actual_name
+    return resolved_targets
 
 
 def _generic_analyze_armature(arm_obj):
-    is_target_valid = mapping.has_pose_bones(arm_obj)
-    resolved_targets = _generic_resolved_targets(arm_obj, None) if is_target_valid else {}
+    analysis = mapping_vrm.analyze_armature(arm_obj)
+    resolved_targets = dict(analysis.get("resolved_default_targets", {}))
     calibration_missing = [
         source_name
         for source_name in GENERIC_CALIBRATION_REQUIRED_SOURCES
         if source_name not in resolved_targets
     ]
-    return {
-        "is_target_valid": is_target_valid,
-        "is_generic": is_target_valid,
-        "resolved_default_targets": resolved_targets,
-        "calibration_required_missing": calibration_missing,
-        "calibration_supported": is_target_valid and not calibration_missing,
-    }
+    analysis["is_generic"] = bool(analysis.get("is_target_valid"))
+    analysis["calibration_required_missing"] = calibration_missing
+    analysis["calibration_supported"] = bool(analysis.get("is_target_valid")) and not calibration_missing
+    return analysis
 
 
 def _generic_is_detected(analysis: dict) -> bool:
-    return bool(analysis.get("is_target_valid"))
+    return bool(analysis.get("is_vrm"))
 
 
 def _generic_apply_standard_scene_mapping(scene):
@@ -203,12 +202,12 @@ _ADAPTERS = {
     TARGET_RIG_GENERIC: TargetRigAdapter(
         rig_id=TARGET_RIG_GENERIC,
         label="VRM / 通用骨架",
-        builtin_preset_file="",
+        builtin_preset_file=mapping_vrm.VRM_BUILTIN_PRESET_FILE,
         runtime_strategy=RUNTIME_STRATEGY_GENERIC,
         analyze_armature=_generic_analyze_armature,
         is_detected=_generic_is_detected,
         apply_standard_scene_mapping=_generic_apply_standard_scene_mapping,
-        clear_scene_report=_noop_clear_scene_report,
+        clear_scene_report=mapping_vrm.clear_scene_report,
         build_runtime_mapping=_empty_runtime_mapping,
         build_calibration_mapping=_generic_build_calibration_mapping,
         prepare_receiver_session=_noop_prepare_receiver_session,
@@ -322,7 +321,7 @@ def analyze_target_rig(arm_obj):
 
 
 def clear_all_scene_reports(scene):
-    for rig_id in (TARGET_RIG_ARP, TARGET_RIG_MMD):
+    for rig_id in (TARGET_RIG_GENERIC, TARGET_RIG_ARP, TARGET_RIG_MMD):
         adapter_by_id(rig_id).clear_scene_report(scene)
 
 
