@@ -1058,7 +1058,9 @@ def _ensure_target_face_cache_target(face):
     if face is state.target_face_ref:
         return
     state.target_face_ref = face
+    state.cached_blend_map = {}
     state.cached_blend_key_blocks = {}
+    state.cached_arkit_blend_map = {}
     state.cached_arkit_blend_key_blocks = {}
 
 
@@ -2817,6 +2819,21 @@ def apply_timer():
     with state.buffer_lock:
         if state.raw_frame_queue:
             latest_raw_frame = state.raw_frame_queue[-1]
+            dirty_bone_from_frames = set()
+            dirty_vmc_from_frames = set()
+            dirty_arkit_from_frames = set()
+            body_dirty_from_frames = False
+            vmc_blends_dirty_from_frames = False
+            vmc_eye_blends_dirty_from_frames = False
+            arkit_blends_dirty_from_frames = False
+            for frame in state.raw_frame_queue:
+                dirty_bone_from_frames.update(frame.get("dirty_bone_names", ()))
+                dirty_vmc_from_frames.update(frame.get("dirty_vmc_blend_names", ()))
+                dirty_arkit_from_frames.update(frame.get("dirty_arkit_blend_names", ()))
+                body_dirty_from_frames = body_dirty_from_frames or bool(frame.get("body_dirty"))
+                vmc_blends_dirty_from_frames = vmc_blends_dirty_from_frames or bool(frame.get("vmc_blends_dirty"))
+                vmc_eye_blends_dirty_from_frames = vmc_eye_blends_dirty_from_frames or bool(frame.get("vmc_eye_blends_dirty"))
+                arkit_blends_dirty_from_frames = arkit_blends_dirty_from_frames or bool(frame.get("arkit_blends_dirty"))
             state.raw_frame_queue.clear()
         if latest_raw_frame is None:
             root = state.root_buf
@@ -2836,16 +2853,16 @@ def apply_timer():
             root = latest_raw_frame.get("root")
             waist = latest_raw_frame.get("waist")
             bones = latest_raw_frame.get("bones", {})
-            dirty_bone_names = latest_raw_frame.get("dirty_bone_names", ())
-            dirty_vmc_blend_names = latest_raw_frame.get("dirty_vmc_blend_names", ())
-            dirty_arkit_blend_names = latest_raw_frame.get("dirty_arkit_blend_names", ())
+            dirty_bone_names = dirty_bone_from_frames | state.raw_frame_dirty_bone_names
+            dirty_vmc_blend_names = dirty_vmc_from_frames | state.raw_frame_dirty_vmc_blend_names
+            dirty_arkit_blend_names = dirty_arkit_from_frames | state.raw_frame_dirty_arkit_blend_names
             blends = latest_raw_frame.get("vmc_blends", {})
             canonical_vmc_blends = latest_raw_frame.get("canonical_vmc_blends", {})
             arkit_blends = latest_raw_frame.get("arkit_blends", {})
-            body_dirty = bool(latest_raw_frame.get("body_dirty"))
-            vmc_blends_dirty = bool(latest_raw_frame.get("vmc_blends_dirty"))
-            vmc_eye_blends_dirty = bool(latest_raw_frame.get("vmc_eye_blends_dirty"))
-            arkit_blends_dirty = bool(latest_raw_frame.get("arkit_blends_dirty"))
+            body_dirty = body_dirty_from_frames or bool(state.raw_frame_body_dirty)
+            vmc_blends_dirty = vmc_blends_dirty_from_frames or bool(state.raw_frame_vmc_blend_dirty)
+            vmc_eye_blends_dirty = vmc_eye_blends_dirty_from_frames or bool(state.raw_frame_vmc_eye_blend_dirty)
+            arkit_blends_dirty = arkit_blends_dirty_from_frames or bool(state.raw_frame_arkit_blend_dirty)
         state.dirty = False
         state.raw_frame_dirty_bone_names = set()
         state.raw_frame_dirty_vmc_blend_names = set()
