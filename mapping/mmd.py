@@ -110,6 +110,14 @@ MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES = frozenset(
     )
 )
 
+MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES = frozenset(
+    (
+        "RightUpperArm",
+        "RightLowerArm",
+        "RightHand",
+    )
+)
+
 _FINGER_TARGETS = {
     ("Thumb", 0): "親指０",
     ("Thumb", 1): "親指１",
@@ -423,6 +431,10 @@ def build_runtime_mapping(scene, arm_obj=None):
 
 def uses_neutral_axis_calibration(source_name: str) -> bool:
     return source_name in MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES
+
+
+def uses_right_arm_swing_correction(source_name: str) -> bool:
+    return source_name in MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES
 
 
 def clear_scene_report(scene):
