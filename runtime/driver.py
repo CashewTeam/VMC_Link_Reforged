@@ -1,11 +1,12 @@
 import time
 
 import bpy
-from mathutils import Euler, Quaternion, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ..core import constants, helpers, state
 from ..mapping import arp as mapping_arp
 from ..mapping import mapper as mapping
+from ..mapping import mmd as mapping_mmd
 from ..mapping import target_rig as mapping_target_rig
 from . import network, properties
 from . import target_runtime
@@ -349,6 +350,66 @@ def _rotation_quaternion_from_snapshot(transform_state):
     return _as_quaternion(Euler(transform_state.get("rotation_euler", (0.0, 0.0, 0.0)), rotation_mode).to_quaternion())
 
 
+def _receiver_armature_snapshot_for(arm_obj):
+    if arm_obj is None:
+        return None
+    for snapshot in state.receiver_armature_snapshots:
+        if snapshot.get("object") is arm_obj:
+            return snapshot
+    return None
+
+
+def _pose_bone_snapshot_transform(armature_snapshot, bone_name: str):
+    if not armature_snapshot:
+        return None
+    return armature_snapshot.get("pose_bones", {}).get(bone_name)
+
+
+def _pose_bone_snapshot_basis_quaternion(pose_bone, armature_snapshot):
+    transform_state = _pose_bone_snapshot_transform(armature_snapshot, pose_bone.name)
+    if transform_state:
+        rotation = _rotation_quaternion_from_snapshot(transform_state)
+        rotation.normalize()
+        return rotation
+    rotation = pose_bone.matrix_basis.to_quaternion()
+    rotation.normalize()
+    return rotation
+
+
+def _pose_bone_snapshot_matrix(pose_bone, armature_snapshot, cache):
+    cached = cache.get(pose_bone.name)
+    if cached is not None:
+        return cached.copy()
+
+    transform_state = _pose_bone_snapshot_transform(armature_snapshot, pose_bone.name)
+    if transform_state:
+        location = Vector(transform_state.get("location", tuple(pose_bone.location)))
+        rotation = _rotation_quaternion_from_snapshot(transform_state)
+        scale = Vector(transform_state.get("scale", tuple(pose_bone.scale)))
+    else:
+        location = pose_bone.location.copy()
+        rotation = pose_bone.matrix_basis.to_quaternion()
+        scale = pose_bone.scale.copy()
+    rotation.normalize()
+    basis_matrix = Matrix.LocRotScale(location, rotation, scale)
+
+    bone_ref = pose_bone.bone
+    matrix_local = bone_ref.matrix_local.copy()
+    parent_bone = pose_bone.parent
+    if parent_bone is None:
+        pose_matrix = bone_ref.convert_local_to_pose(basis_matrix, matrix_local)
+    else:
+        parent_matrix = _pose_bone_snapshot_matrix(parent_bone, armature_snapshot, cache)
+        pose_matrix = bone_ref.convert_local_to_pose(
+            basis_matrix,
+            matrix_local,
+            parent_matrix=parent_matrix,
+            parent_matrix_local=parent_bone.bone.matrix_local,
+        )
+    cache[pose_bone.name] = pose_matrix.copy()
+    return pose_matrix
+
+
 def _restore_transform_state(item, snapshot):
     if item is None or not snapshot:
         return
@@ -397,11 +458,7 @@ def _capture_face_state(face_obj):
     }
 
 
-def capture_receiver_start_state(scene):
-    armatures = []
-    faces = []
-    seen = set()
-
+def _clear_target_apply_cache():
     state.receiver_target_apply_armature_ref = None
     state.receiver_target_apply_face_ref = None
     state.receiver_target_apply_arm_location = None
@@ -410,6 +467,14 @@ def capture_receiver_start_state(scene):
     state.receiver_target_apply_bone_rotations = {}
     state.receiver_target_apply_ik_fk_switches = {}
     state.receiver_target_apply_shape_values = {}
+
+
+def capture_receiver_start_state(scene):
+    armatures = []
+    faces = []
+    seen = set()
+
+    _clear_target_apply_cache()
     state.receiver_preview_apply_armature_ref = None
     state.receiver_preview_apply_face_ref = None
     state.receiver_preview_apply_arm_location = None
@@ -633,8 +698,79 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
             if center_bone is not None:
                 context["mmd_center_bone"] = center_bone
                 context["mmd_center_start_location"] = center_bone.location.copy()
-            context["mmd_runtime_entries"] = context.get("generic_runtime_entries", ())
-            context["mmd_runtime_entries_by_source"] = context.get("generic_runtime_entries_by_source", {})
+            if mapping.has_pose_bones(preview_arm):
+                runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
+                entries = []
+                source_snapshot = _receiver_armature_snapshot_for(preview_arm)
+                target_snapshot = _receiver_armature_snapshot_for(arm_obj)
+                source_snapshot_matrix_cache = {}
+                target_snapshot_matrix_cache = {}
+                for source_name, target_name in runtime_map.items():
+                    source_bone = preview_arm.pose.bones.get(source_name)
+                    target_bone = arm_obj.pose.bones.get(target_name)
+                    if source_bone is None or target_bone is None:
+                        continue
+                    source_rest = source_bone.bone.matrix_local.to_quaternion()
+                    target_rest = target_bone.bone.matrix_local.to_quaternion()
+                    source_rest.normalize()
+                    target_rest.normalize()
+                    source_rest_inv = source_rest.inverted()
+                    target_rest_inv = target_rest.inverted()
+                    source_start_basis_rotation = _pose_bone_snapshot_basis_quaternion(source_bone, source_snapshot)
+                    target_start_basis_rotation = _pose_bone_snapshot_basis_quaternion(target_bone, target_snapshot)
+                    source_start_basis_rotation.normalize()
+                    target_start_basis_rotation.normalize()
+                    source_start_basis_rotation_inv = source_start_basis_rotation.inverted()
+                    source_start_matrix = _pose_bone_snapshot_matrix(
+                        source_bone,
+                        source_snapshot,
+                        source_snapshot_matrix_cache,
+                    )
+                    target_start_matrix = _pose_bone_snapshot_matrix(
+                        target_bone,
+                        target_snapshot,
+                        target_snapshot_matrix_cache,
+                    )
+                    source_start_rotation = source_start_matrix.to_quaternion()
+                    target_start_rotation = target_start_matrix.to_quaternion()
+                    source_start_rotation.normalize()
+                    target_start_rotation.normalize()
+                    source_axis = source_start_rotation @ Vector((0.0, 1.0, 0.0))
+                    target_axis = target_start_rotation @ Vector((0.0, 1.0, 0.0))
+                    target_to_source_axis = target_axis.rotation_difference(source_axis)
+                    calibration = target_to_source_axis @ target_start_rotation @ source_start_rotation.inverted()
+                    calibration.normalize()
+                    target_bone_ref = target_bone.bone
+                    parent_bone = target_bone.parent
+                    entries.append(
+                        (
+                            source_name,
+                            target_name,
+                            source_bone,
+                            target_bone,
+                            mapping_mmd.uses_neutral_axis_calibration(source_name),
+                            calibration.copy(),
+                            source_rest.copy(),
+                            source_rest_inv.copy(),
+                            target_rest.copy(),
+                            target_rest_inv.copy(),
+                            source_start_basis_rotation.copy(),
+                            source_start_basis_rotation_inv.copy(),
+                            target_start_basis_rotation.copy(),
+                            target_bone_ref,
+                            target_bone_ref.matrix_local.copy(),
+                            parent_bone,
+                            parent_bone is not None,
+                            parent_bone.bone.matrix_local.copy() if parent_bone is not None else None,
+                            target_start_matrix.to_translation(),
+                            target_start_matrix.to_scale(),
+                        )
+                    )
+                context["mmd_runtime_entries"] = tuple(entries)
+                context["mmd_runtime_entries_by_source"] = {
+                    entry[0]: entry
+                    for entry in context["mmd_runtime_entries"]
+                }
         return context
 
     context["target_rig"] = mapping_target_rig.TARGET_RIG_ARP
@@ -816,11 +952,13 @@ def refresh_receiver_target_context(scene):
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     if not mapping.has_pose_bones(arm_obj):
         state.receiver_target_context = {}
+        _clear_target_apply_cache()
         return {}
     if not state.cached_bone_map:
         mapping.rebuild_maps(scene)
     context = _build_receiver_target_context(scene, arm_obj, preview_arm)
     state.receiver_target_context = context
+    _clear_target_apply_cache()
     return context
 
 
@@ -2851,8 +2989,14 @@ def apply_timer():
     if arm is not None and not target_runtime_strategy:
         target_runtime_strategy = mapping_target_rig.resolve_scene_runtime_strategy(scene, arm)
     target_root_motion_needs_update = bool(body_dirty)
+    if target_runtime_strategy == mapping_target_rig.RUNTIME_STRATEGY_MMD and body_dirty:
+        dirty_bone_names = frozenset()
     target_armature_needs_update = bool(
         dirty_bone_names
+        or (
+            body_dirty
+            and target_runtime_strategy == mapping_target_rig.RUNTIME_STRATEGY_MMD
+        )
         or (
             vmc_eye_blends_dirty
             and target_runtime_strategy != mapping_target_rig.RUNTIME_STRATEGY_ARP

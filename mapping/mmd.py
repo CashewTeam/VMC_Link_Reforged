@@ -91,6 +91,25 @@ MMD_DEFAULT_BONE_TARGETS = {
     "RightToeBase": "右つま先",
 }
 
+MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES = frozenset(
+    (
+        "LeftUpperArm",
+        "LeftLowerArm",
+        "LeftHand",
+        "RightUpperArm",
+        "RightLowerArm",
+        "RightHand",
+        "LeftUpperLeg",
+        "LeftLowerLeg",
+        "LeftFoot",
+        "LeftToeBase",
+        "RightUpperLeg",
+        "RightLowerLeg",
+        "RightFoot",
+        "RightToeBase",
+    )
+)
+
 _FINGER_TARGETS = {
     ("Thumb", 0): "親指０",
     ("Thumb", 1): "親指１",
@@ -400,6 +419,10 @@ def build_runtime_mapping(scene, arm_obj=None):
             continue
         runtime_map[source_key] = actual_name
     return runtime_map
+
+
+def uses_neutral_axis_calibration(source_name: str) -> bool:
+    return source_name in MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES
 
 
 def clear_scene_report(scene):

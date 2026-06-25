@@ -428,19 +428,109 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
     if arm_obj is None or getattr(arm_obj, "pose", None) is None:
         return
 
-    # MMD 先复用通用骨骼旋转链路，保持当前预览与录制结果一致。
-    # MMD 专用逻辑暂时只保留在映射检测/校验/重建与根位移入口上，
-    # 避免在未完成轴向校准前引入比通用链路更差的肩臂/下半身旋转结果。
-    _evaluate_generic_target_armature(
-        scene,
-        arm_obj,
-        bones,
-        dirty_bone_names,
-        blends,
-        canonical_blends,
-        sample,
-        context,
-    )
+    entries = context.get("mmd_runtime_entries", ()) if context is not None else ()
+    if not entries:
+        _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample, context)
+        return
+
+    if dirty_bone_names:
+        entries_by_source = (context or {}).get("mmd_runtime_entries_by_source", {})
+        entry_iter = (
+            entries_by_source[source_name]
+            for source_name in dirty_bone_names
+            if source_name in entries_by_source
+        )
+    else:
+        entry_iter = entries
+
+    source_pose_matrices = {}
+    target_pose_matrices = {}
+    for (
+        source_name,
+        _target_name,
+        source_bone,
+        target_bone,
+        use_neutral_axis_calibration,
+        calibration,
+        source_rest,
+        source_rest_inv,
+        target_rest,
+        target_rest_inv,
+        source_start_basis_rotation,
+        source_start_basis_rotation_inv,
+        target_start_basis_rotation,
+        target_bone_ref,
+        target_matrix_local,
+        parent_bone,
+        has_parent,
+        parent_matrix_local,
+        target_start_location,
+        target_start_scale,
+    ) in entry_iter:
+        if source_bone is None or target_bone is None:
+            continue
+
+        if use_neutral_axis_calibration:
+            source_matrix = _source_pose_matrix_from_raw(
+                source_bone,
+                bones,
+                context.get("preview_start_basis_rotations", {}),
+                source_pose_matrices,
+            )
+            source_armature_q = source_matrix.to_quaternion()
+            source_armature_q.normalize()
+            desired_armature_q = calibration @ source_armature_q
+            desired_armature_q.normalize()
+            desired_matrix = Matrix.LocRotScale(
+                target_start_location,
+                desired_armature_q,
+                target_start_scale,
+            )
+            if not has_parent:
+                basis_matrix = target_bone_ref.convert_local_to_pose(
+                    desired_matrix,
+                    target_matrix_local,
+                    invert=True,
+                )
+            else:
+                parent_pose_matrix = _resolve_target_pose_matrix_from_sample(
+                    parent_bone,
+                    sample,
+                    target_pose_matrices,
+                )
+                basis_matrix = target_bone_ref.convert_local_to_pose(
+                    desired_matrix,
+                    target_matrix_local,
+                    parent_matrix=parent_pose_matrix,
+                    parent_matrix_local=parent_matrix_local,
+                    invert=True,
+                )
+            desired_rotation = basis_matrix.to_quaternion()
+            desired_rotation.normalize()
+        else:
+            source_rotation = _source_local_rotation_from_pose(
+                bones.get(source_name),
+                source_start_basis_rotation,
+                source_rest,
+                source_rest_inv,
+                source_bone,
+            )
+            source_delta = source_rotation @ source_start_basis_rotation_inv
+            source_delta.normalize()
+            target_delta = _remap_local_delta_with_rest_quaternions(
+                source_rest,
+                source_rest_inv,
+                target_rest,
+                target_rest_inv,
+                source_delta,
+            )
+            desired_rotation = target_delta @ target_start_basis_rotation
+            desired_rotation.normalize()
+
+        bone_sample = _ensure_bone_sample(sample, target_bone)
+        bone_sample["rotation_quaternion"] = desired_rotation
+
+    _evaluate_eye_look_target_bones(scene, arm_obj, blends, canonical_blends, sample, bones, context)
 
 
 def _evaluate_target_shapes(scene, face_obj, use_arkit_face, blends, canonical_blends, arkit_blends, dirty_vmc_blend_names, dirty_arkit_blend_names, sample):
