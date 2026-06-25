@@ -418,6 +418,10 @@ def capture_receiver_start_state(scene):
     state.receiver_preview_apply_bone_rotations = {}
     state.receiver_preview_apply_shape_values = {}
 
+    if mapping_target_rig.scene_target_rig_type(scene) == mapping_target_rig.TARGET_RIG_ARP:
+        mapping_arp.reset_runtime_control_transforms(scene)
+        bpy.context.view_layer.update()
+
     for prop_name in ("vmc_link_preview_armature", "vmc_link_armature"):
         arm_obj = getattr(scene, prop_name, None)
         if not mapping.has_pose_bones(arm_obj):

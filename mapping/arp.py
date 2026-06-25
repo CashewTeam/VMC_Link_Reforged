@@ -194,18 +194,10 @@ ARP_RUNTIME_SOURCE_GROUPS = (
 )
 
 ARP_ALLOWED_CONTROL_TARGETS = frozenset(ARP_DEFAULT_BONE_TARGETS.values())
-ARP_DELTA_ROTATION_SOURCE_BONES = frozenset(
-    (
-        "LeftFoot",
-        "RightFoot",
-        "LeftToeBase",
-        "RightToeBase",
-        *constants.INTERMEDIATE_OPTIONAL_BONES,
-    )
-)
+ARP_DELTA_ROTATION_SOURCE_BONES = frozenset()
 
 
-ARP_LOCAL_BASIS_DELTA_SOURCE_BONES = frozenset(constants.INTERMEDIATE_OPTIONAL_BONES)
+ARP_LOCAL_BASIS_DELTA_SOURCE_BONES = frozenset()
 ARP_REST_AXIS_REMAP_SOURCE_BONES = frozenset(
     source_name
     for source_name in constants.INTERMEDIATE_OPTIONAL_BONES
@@ -475,6 +467,46 @@ def restore_session_state(arm_obj, session_state):
         pose_bone = arm_obj.pose.bones.get(bone_name)
         if pose_bone is not None and "ik_fk_switch" in pose_bone:
             pose_bone["ik_fk_switch"] = float(value)
+
+
+def reset_runtime_control_transforms(scene):
+    arm_obj = getattr(scene, "vmc_link_armature", None)
+    analysis = analyze_armature(arm_obj)
+    if not analysis["is_arp"]:
+        return 0
+
+    runtime_map = build_runtime_mapping(scene, arm_obj)
+    if not runtime_map:
+        runtime_map = analysis["resolved_default_targets"]
+
+    pose = arm_obj.pose.bones
+    target_names = {
+        target_name
+        for target_name in runtime_map.values()
+        if target_name in pose
+    }
+
+    reset_count = 0
+    for target_name in target_names:
+        pose_bone = pose.get(target_name)
+        if pose_bone is None:
+            continue
+        pose_bone.location = (0.0, 0.0, 0.0)
+        pose_bone.rotation_mode = "QUATERNION"
+        pose_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pose_bone.scale = (1.0, 1.0, 1.0)
+        reset_count += 1
+
+    traj_bone = pose.get("c_traj")
+    if traj_bone is not None:
+        traj_location = tuple(traj_bone.location)
+        traj_bone.rotation_mode = "QUATERNION"
+        traj_bone.location = traj_location
+        traj_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        traj_bone.scale = (1.0, 1.0, 1.0)
+        reset_count += 1
+
+    return reset_count
 
 
 def prepare_receiver_session(scene):
