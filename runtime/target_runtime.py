@@ -110,62 +110,6 @@ def _source_local_rotation_from_pose(raw_pose, source_start_basis=None, source_r
     return local_rotation
 
 
-def _source_pose_rotation_from_bones(source_bone, raw_bones, start_basis_rotations, cache):
-    if source_bone is None:
-        return Quaternion()
-
-    bone_name = source_bone.name
-    cached = cache.get(bone_name)
-    if cached is not None:
-        return cached.to_quaternion()
-
-    source_rest = source_bone.bone.matrix_local.to_quaternion()
-    source_rest.normalize()
-    source_rest_inv = source_rest.inverted()
-    local_rotation = _source_local_rotation_from_pose(
-        raw_bones.get(bone_name),
-        start_basis_rotations.get(bone_name),
-        source_rest,
-        source_rest_inv,
-        source_bone,
-    )
-    basis_matrix = Matrix.LocRotScale(
-        source_bone.location.copy(),
-        local_rotation,
-        source_bone.scale.copy(),
-    )
-    bone_ref = source_bone.bone
-    matrix_local = bone_ref.matrix_local.copy()
-    parent_bone = source_bone.parent
-    if parent_bone is None:
-        pose_matrix = bone_ref.convert_local_to_pose(
-            basis_matrix,
-            matrix_local,
-        )
-    else:
-        parent_pose_matrix = _source_pose_matrix_from_bones(
-            source_bone.parent,
-            raw_bones,
-            start_basis_rotations,
-            cache,
-        )
-        pose_matrix = bone_ref.convert_local_to_pose(
-            basis_matrix,
-            matrix_local,
-            parent_matrix=parent_pose_matrix,
-            parent_matrix_local=parent_bone.bone.matrix_local,
-        )
-    cache[bone_name] = pose_matrix.copy()
-    pose_rotation = pose_matrix.to_quaternion()
-    pose_rotation.normalize()
-    return pose_rotation
-
-
-def _source_pose_matrix_from_bones(source_bone, raw_bones, start_basis_rotations, cache):
-    _source_pose_rotation_from_bones(source_bone, raw_bones, start_basis_rotations, cache)
-    return cache[source_bone.name].copy()
-
-
 def _resolve_target_pose_matrix_from_sample(pose_bone, sample, cache):
     bone_name = pose_bone.name
     cached = cache.get(bone_name)
@@ -199,30 +143,6 @@ def _resolve_target_pose_matrix_from_sample(pose_bone, sample, cache):
         )
     cache[bone_name] = pose_matrix.copy()
     return pose_matrix
-
-
-def _source_direction_in_target_space(source_rotation, context, arm_obj):
-    source_direction = source_rotation @ Vector((0.0, 1.0, 0.0))
-    preview_arm = context.get("preview")
-    target_arm = context.get("target") or arm_obj
-    if preview_arm is not None and target_arm is not None:
-        source_direction = target_arm.matrix_world.to_3x3().inverted() @ (
-            preview_arm.matrix_world.to_3x3() @ source_direction
-        )
-    source_direction.normalize()
-    return source_direction
-
-
-def _align_target_start_direction(target_start_rotation, desired_direction):
-    start_direction = target_start_rotation @ Vector((0.0, 1.0, 0.0))
-    if start_direction.length <= 1e-8 or desired_direction.length <= 1e-8:
-        return None
-    start_direction.normalize()
-    desired_direction.normalize()
-    swing = start_direction.rotation_difference(desired_direction)
-    desired_rotation = swing @ target_start_rotation
-    desired_rotation.normalize()
-    return desired_rotation
 
 
 def _remap_local_delta_with_rest_quaternions(source_rest, source_rest_inv, target_rest, target_rest_inv, source_delta):
@@ -583,9 +503,7 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
         return
 
     filtered_rotations = context.setdefault("arp_filtered_rotations", {})
-    source_pose_rotations = {}
     target_pose_matrices = {}
-    preview_start_basis_rotations = context.get("preview_start_basis_rotations", {})
     for bone_name, pose_bone in context.get("arp_ik_fk_pose_bones", ()):
         sample["ik_fk_switches"][bone_name] = 1.0
         sample["ik_fk_pose_bones"][bone_name] = pose_bone
@@ -612,7 +530,7 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
         target_name,
         source_bone,
         target_bone,
-        _calibration,
+        calibration,
         _uses_local_basis_delta,
         _uses_delta_rotation,
         _uses_rest_axis_remap,
@@ -638,30 +556,19 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
         if mapping_arp.uses_world_rotation(source_name):
             if raw_pose is None:
                 continue
-            if (
-                source_bone is None
-                or target_start_rotation is None
-                or target_bone_ref is None
-                or target_matrix_local is None
-            ):
+            if source_bone is None or target_bone_ref is None or target_matrix_local is None:
                 continue
-            source_rotation = _source_pose_rotation_from_bones(
-                source_bone,
-                bones,
-                preview_start_basis_rotations,
-                source_pose_rotations,
-            )
-            desired_direction = _source_direction_in_target_space(source_rotation, context, arm_obj)
-            desired_rotation = _align_target_start_direction(target_start_rotation, desired_direction)
-            if desired_rotation is None:
-                continue
+            source_armature_q = source_bone.matrix.to_quaternion()
+            source_armature_q.normalize()
+            target_armature_q = calibration.inverted() @ source_armature_q
+            target_armature_q.normalize()
             if start_location is None or start_scale is None:
                 start_matrix = target_bone.matrix.copy()
                 start_location = start_matrix.to_translation()
                 start_scale = start_matrix.to_scale()
             desired_matrix = Matrix.LocRotScale(
                 start_location,
-                desired_rotation,
+                target_armature_q,
                 start_scale,
             )
             if not has_parent:
