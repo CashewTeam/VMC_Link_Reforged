@@ -204,7 +204,7 @@ def ensure_scene_props():
         name="目标骨架类型",
         description="切换目标骨架辅助工具和专用运行时策略",
         items=(
-            ("GENERIC", "通用骨架", "使用通用骨骼映射"),
+            ("GENERIC", "VRM / 通用骨架", "使用 VRM / 通用骨骼映射"),
             ("ARP", "Auto Rig Pro", "使用 ARP 专用检测、自动填充和运行时策略"),
             ("MMD", "MMD", "使用 MMD 标准骨架检测与默认名表"),
         ),

@@ -152,7 +152,10 @@ class VMC_LINK_OT_calibrate_dummy_armature_lengths(bpy.types.Operator):
         try:
             result = dummy_vrm.calibrate_intermediate_rig_lengths(context)
             calibrated = result["calibrated_bones"]
-            self.report({"INFO"}, f"已按肩高缩放 {result['scale_ratio']:.3f}，并校准 {len(calibrated)} 根骨骼")
+            self.report(
+                {"INFO"},
+                f"已按 {result['target_rig_label']} 肩高缩放 {result['scale_ratio']:.3f}，校准 {len(calibrated)} 根骨骼，识别映射 {result['mapped_bones']} 项",
+            )
         except Exception as exc:
             self.report({"ERROR"}, f"校准 VRM 预览骨架长度失败：{exc}")
             return {"CANCELLED"}

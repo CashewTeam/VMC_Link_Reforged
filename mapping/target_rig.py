@@ -1,4 +1,6 @@
+from ..core import constants
 from . import arp as mapping_arp
+from . import mapper as mapping
 from . import mmd as mapping_mmd
 
 
@@ -34,6 +36,7 @@ class TargetRigAdapter:
         "_apply_standard_scene_mapping",
         "_clear_scene_report",
         "_build_runtime_mapping",
+        "_build_calibration_mapping",
         "_prepare_receiver_session",
     )
 
@@ -48,6 +51,7 @@ class TargetRigAdapter:
         apply_standard_scene_mapping,
         clear_scene_report,
         build_runtime_mapping,
+        build_calibration_mapping,
         prepare_receiver_session,
     ):
         self.rig_id = rig_id
@@ -59,6 +63,7 @@ class TargetRigAdapter:
         self._apply_standard_scene_mapping = apply_standard_scene_mapping
         self._clear_scene_report = clear_scene_report
         self._build_runtime_mapping = build_runtime_mapping
+        self._build_calibration_mapping = build_calibration_mapping
         self._prepare_receiver_session = prepare_receiver_session
 
     def analyze_armature(self, arm_obj):
@@ -76,17 +81,47 @@ class TargetRigAdapter:
     def build_runtime_mapping(self, scene, arm_obj):
         return self._build_runtime_mapping(scene, arm_obj)
 
+    def build_calibration_mapping(self, scene, arm_obj):
+        return self._build_calibration_mapping(scene, arm_obj)
+
     def prepare_receiver_session(self, scene):
         return self._prepare_receiver_session(scene)
 
 
-def _generic_analyze_armature(arm_obj):
-    from . import mapper as mapping
+GENERIC_CALIBRATION_REQUIRED_SOURCES = (
+    "LeftUpperArm",
+    "RightUpperArm",
+    "LeftUpperLeg",
+    "RightUpperLeg",
+)
 
+
+def _generic_resolved_targets(arm_obj, scene=None):
+    resolved = {}
+    if not mapping.has_pose_bones(arm_obj):
+        return resolved
+
+    for source_name in (*constants.INTERMEDIATE_REQUIRED_BONES, *constants.INTERMEDIATE_OPTIONAL_BONES):
+        actual_name = mapping.find_bone_name(arm_obj, source_name, scene)
+        if actual_name:
+            resolved[source_name] = actual_name
+    return resolved
+
+
+def _generic_analyze_armature(arm_obj):
     is_target_valid = mapping.has_pose_bones(arm_obj)
+    resolved_targets = _generic_resolved_targets(arm_obj, None) if is_target_valid else {}
+    calibration_missing = [
+        source_name
+        for source_name in GENERIC_CALIBRATION_REQUIRED_SOURCES
+        if source_name not in resolved_targets
+    ]
     return {
         "is_target_valid": is_target_valid,
         "is_generic": is_target_valid,
+        "resolved_default_targets": resolved_targets,
+        "calibration_required_missing": calibration_missing,
+        "calibration_supported": is_target_valid and not calibration_missing,
     }
 
 
@@ -95,8 +130,6 @@ def _generic_is_detected(analysis: dict) -> bool:
 
 
 def _generic_apply_standard_scene_mapping(scene):
-    from . import mapper as mapping
-
     arm_obj = getattr(scene, "vmc_link_armature", None)
     if not mapping.has_pose_bones(arm_obj):
         raise RuntimeError("请先绑定目标骨架")
@@ -116,6 +149,52 @@ def _empty_runtime_mapping(_scene, _arm_obj):
     return {}
 
 
+def _generic_build_calibration_mapping(scene, arm_obj):
+    if not mapping.has_pose_bones(arm_obj):
+        raise RuntimeError("请先绑定目标骨架")
+
+    resolved_targets = _generic_resolved_targets(arm_obj, scene)
+    missing = [
+        source_name
+        for source_name in GENERIC_CALIBRATION_REQUIRED_SOURCES
+        if source_name not in resolved_targets
+    ]
+    if missing:
+        raise RuntimeError("当前 VRM / 通用骨架缺少校准所需骨骼: " + ", ".join(missing))
+    return resolved_targets
+
+
+def _arp_build_calibration_mapping(_scene, arm_obj):
+    analysis = mapping_arp.analyze_armature(arm_obj)
+    if not analysis.get("is_target_valid"):
+        raise RuntimeError("请先绑定目标骨架")
+    if not analysis.get("is_arp"):
+        raise RuntimeError("当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
+    return {
+        source_name: analysis["resolved_default_targets"][source_name]
+        for source_name in mapping_arp.ARP_RUNTIME_SOURCE_ORDER
+        if source_name in analysis["resolved_default_targets"]
+    }
+
+
+def _mmd_build_calibration_mapping(scene, arm_obj):
+    analysis = mapping_mmd.analyze_armature(arm_obj)
+    if not analysis.get("is_target_valid"):
+        raise RuntimeError("请先绑定目标骨架")
+    if not analysis.get("is_mmd"):
+        raise RuntimeError("当前目标骨架不是可识别的 MMD 标准骨架")
+
+    runtime_map = mapping_mmd.build_runtime_mapping(scene, arm_obj)
+    missing = [
+        source_name
+        for source_name in GENERIC_CALIBRATION_REQUIRED_SOURCES
+        if source_name not in runtime_map
+    ]
+    if missing:
+        raise RuntimeError("当前 MMD 骨架缺少校准所需映射: " + ", ".join(missing))
+    return runtime_map
+
+
 def _noop_prepare_receiver_session(scene):
     return analyze_scene_target(scene)
 
@@ -123,7 +202,7 @@ def _noop_prepare_receiver_session(scene):
 _ADAPTERS = {
     TARGET_RIG_GENERIC: TargetRigAdapter(
         rig_id=TARGET_RIG_GENERIC,
-        label="通用骨架",
+        label="VRM / 通用骨架",
         builtin_preset_file="",
         runtime_strategy=RUNTIME_STRATEGY_GENERIC,
         analyze_armature=_generic_analyze_armature,
@@ -131,6 +210,7 @@ _ADAPTERS = {
         apply_standard_scene_mapping=_generic_apply_standard_scene_mapping,
         clear_scene_report=_noop_clear_scene_report,
         build_runtime_mapping=_empty_runtime_mapping,
+        build_calibration_mapping=_generic_build_calibration_mapping,
         prepare_receiver_session=_noop_prepare_receiver_session,
     ),
     TARGET_RIG_ARP: TargetRigAdapter(
@@ -143,6 +223,7 @@ _ADAPTERS = {
         apply_standard_scene_mapping=mapping_arp.apply_standard_scene_mapping,
         clear_scene_report=mapping_arp.clear_scene_report,
         build_runtime_mapping=mapping_arp.build_runtime_mapping,
+        build_calibration_mapping=_arp_build_calibration_mapping,
         prepare_receiver_session=mapping_arp.prepare_receiver_session,
     ),
     TARGET_RIG_MMD: TargetRigAdapter(
@@ -155,6 +236,7 @@ _ADAPTERS = {
         apply_standard_scene_mapping=mapping_mmd.apply_standard_scene_mapping,
         clear_scene_report=mapping_mmd.clear_scene_report,
         build_runtime_mapping=mapping_mmd.build_runtime_mapping,
+        build_calibration_mapping=_mmd_build_calibration_mapping,
         prepare_receiver_session=_noop_prepare_receiver_session,
     ),
 }
@@ -268,6 +350,30 @@ def build_runtime_mapping_for_scene(scene, arm_obj=None):
     selected = analyze_scene_target(scene, arm_obj)
     resolved_adapter = selected["resolved_adapter"]
     return resolved_adapter.build_runtime_mapping(scene, arm_obj)
+
+
+def build_calibration_mapping_for_scene(scene, arm_obj=None):
+    if arm_obj is None and scene is not None:
+        arm_obj = getattr(scene, "vmc_link_armature", None)
+    if not mapping.has_pose_bones(arm_obj):
+        raise RuntimeError("请先绑定目标骨架")
+
+    selected = analyze_scene_target(scene, arm_obj)
+    selected_adapter = selected["selected_adapter"]
+    if selected_adapter.rig_id != TARGET_RIG_GENERIC and not selected_adapter.is_detected(selected["analysis"]):
+        if selected_adapter.rig_id == TARGET_RIG_ARP:
+            raise RuntimeError("当前目标骨架未识别为 Auto Rig Pro，请先检查 ARP 骨架或切换到 VRM / 通用骨架")
+        if selected_adapter.rig_id == TARGET_RIG_MMD:
+            raise RuntimeError("当前目标骨架未识别为 MMD，请先检查 MMD 骨架或切换到 VRM / 通用骨架")
+    runtime_map = selected_adapter.build_calibration_mapping(scene, arm_obj)
+    if not runtime_map:
+        raise RuntimeError(f"当前 {selected_adapter.label} 没有可用于校准的骨骼映射")
+    return {
+        "selected_rig": selected_adapter.rig_id,
+        "selected_adapter": selected_adapter,
+        "analysis": selected["analysis"],
+        "runtime_map": runtime_map,
+    }
 
 
 def prepare_scene_receiver_session(scene):

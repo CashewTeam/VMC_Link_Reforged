@@ -165,8 +165,8 @@ class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
             draw_mmd_helper(layout, scene)
         else:
             info_box = layout.box()
-            info_box.label(text="通用骨架模式", icon="INFO")
-            info_box.label(text="当前只显示通用骨骼映射与 JSON 预设")
+            info_box.label(text="VRM / 通用骨架模式", icon="INFO")
+            info_box.label(text="当前显示通用骨骼映射与 JSON 预设")
         draw_mapping_preset_controls(layout, scene, constants.MAPPING_KIND_BONE)
         draw_bone_mapping_entries(layout, scene)
 

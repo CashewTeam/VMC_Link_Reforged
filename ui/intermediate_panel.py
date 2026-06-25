@@ -1,5 +1,6 @@
 import bpy
 
+from ..mapping import target_rig as mapping_target_rig
 from ..preview import dummy_vrm
 from ..runtime import driver as runtime
 
@@ -21,6 +22,11 @@ class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):
         body_box = layout.box()
         body_col = body_box.column(align=True)
         body_col.label(text="VRM 预览骨架", icon="ARMATURE_DATA")
+        calibration_info = mapping_target_rig.analyze_scene_target(scene, getattr(scene, "vmc_link_armature", None))
+        selected_adapter = calibration_info["selected_adapter"]
+        body_col.label(text=f"当前校准策略: {selected_adapter.label}", icon="INFO")
+        if selected_adapter.rig_id != mapping_target_rig.TARGET_RIG_GENERIC and calibration_info["resolved_rig"] != selected_adapter.rig_id:
+            body_col.label(text="当前目标骨架未通过所选类型识别，校准会被拒绝", icon="ERROR")
 
         if status["armature"] is None:
             body_col.label(text="尚未创建 VRM 预览骨架", icon="INFO")

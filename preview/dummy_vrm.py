@@ -529,18 +529,11 @@ def calibrate_intermediate_rig_lengths(context):
     if target_arm is None or getattr(target_arm, "type", None) != "ARMATURE" or getattr(target_arm, "pose", None) is None:
         raise RuntimeError("请先绑定目标骨架")
 
-    from ..mapping import arp as mapping_arp
+    from ..mapping import target_rig as mapping_target_rig
 
-    analysis = mapping_arp.analyze_armature(target_arm)
-    if not analysis["is_arp"]:
-        raise RuntimeError("当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
-    runtime_map = {
-        source_name: analysis["resolved_default_targets"][source_name]
-        for source_name in mapping_arp.ARP_RUNTIME_SOURCE_ORDER
-        if source_name in analysis["resolved_default_targets"]
-    }
-    if not runtime_map:
-        raise RuntimeError("当前目标骨架没有可用于长度校准的 ARP 映射")
+    calibration_info = mapping_target_rig.build_calibration_mapping_for_scene(scene, target_arm)
+    runtime_map = calibration_info["runtime_map"]
+    strategy_label = calibration_info["selected_adapter"].label
 
     preview_arm = create_intermediate_rig(context, rebuild=True)
     scale_ratio = _uniform_object_scale_to_shoulder_height(context, preview_arm, target_arm, runtime_map)
@@ -596,8 +589,10 @@ def calibrate_intermediate_rig_lengths(context):
 
     tag_intermediate_rig(preview_arm)
     return {
+        "target_rig_label": strategy_label,
         "scale_ratio": scale_ratio,
         "calibrated_bones": calibrated,
+        "mapped_bones": len(runtime_map),
     }
 
 
