@@ -17,6 +17,35 @@ def _build_canonical_bone_lookups():
 _CANONICAL_BONE_BY_LOWER, _CANONICAL_BONE_BY_NORMALIZED = _build_canonical_bone_lookups()
 
 
+def _build_canonical_blend_lookups():
+    lowered = {}
+    for canonical_name, aliases in constants.BLEND_ALIASES.items():
+        for candidate in (canonical_name, *aliases):
+            lowered.setdefault(str(candidate).lower(), canonical_name)
+    return lowered
+
+
+_CANONICAL_BLEND_BY_LOWER = _build_canonical_blend_lookups()
+
+
+VMC_EYE_LOOK_BLEND_KEYS = frozenset(
+    {
+        "LookUp",
+        "LookDown",
+        "LookLeft",
+        "LookRight",
+        "LookUp_L",
+        "LookUp_R",
+        "LookDown_L",
+        "LookDown_R",
+        "LookLeft_L",
+        "LookLeft_R",
+        "LookRight_L",
+        "LookRight_R",
+    }
+)
+
+
 def has_pose_bones(obj) -> bool:
     return bool(obj and getattr(obj, "type", None) == "ARMATURE" and getattr(obj, "pose", None) is not None)
 
@@ -32,11 +61,15 @@ def has_shape_keys(obj) -> bool:
 
 def invalidate_bone_map_cache(_self=None, _context=None):
     state.cached_bone_map = {}
+    state.receiver_target_context = {}
 
 
 def invalidate_blend_map_cache(_self=None, _context=None):
     state.cached_blend_map = {}
     state.cached_arkit_blend_map = {}
+    state.cached_blend_key_blocks = {}
+    state.cached_arkit_blend_key_blocks = {}
+    state.target_face_ref = None
 
 
 def handle_armature_changed(scene):
@@ -44,12 +77,9 @@ def handle_armature_changed(scene):
     arm = getattr(scene, "vmc_link_armature", None)
     if not has_pose_bones(arm):
         return
-    from . import arp as mapping_arp
+    from . import target_rig as mapping_target_rig
 
-    if mapping_arp.analyze_armature(arm)["is_arp"]:
-        mapping_arp.apply_standard_scene_mapping(scene)
-        return
-    autofill_empty_manual_overrides(scene, arm)
+    mapping_target_rig.apply_selected_scene_mapping(scene, arm, fallback_to_generic=True)
 
 
 def handle_face_object_changed(_scene):
@@ -279,6 +309,10 @@ def get_vmc_bone_pose(raw_bones: dict, wanted: str):
     if not raw_bones:
         return None
 
+    direct = raw_bones.get(wanted)
+    if direct is not None:
+        return direct
+
     lowered = {str(name).lower(): raw for name, raw in raw_bones.items()}
     normalized = {helpers.normalize_bone_name(name): raw for name, raw in raw_bones.items()}
 
@@ -294,15 +328,24 @@ def get_vmc_bone_pose(raw_bones: dict, wanted: str):
     return None
 
 
+def canonical_vmc_bone_name(raw_name: str):
+    source_name = _CANONICAL_BONE_BY_LOWER.get(str(raw_name).lower())
+    if source_name is None:
+        source_name = _CANONICAL_BONE_BY_NORMALIZED.get(helpers.normalize_bone_name(raw_name))
+    return source_name
+
+
+def canonical_vmc_blend_name(raw_name: str):
+    return _CANONICAL_BLEND_BY_LOWER.get(str(raw_name).lower())
+
+
 def canonicalize_vmc_bones(raw_bones: dict):
     if not raw_bones:
         return {}
 
     canonical = {}
     for raw_name, raw in raw_bones.items():
-        source_name = _CANONICAL_BONE_BY_LOWER.get(str(raw_name).lower())
-        if source_name is None:
-            source_name = _CANONICAL_BONE_BY_NORMALIZED.get(helpers.normalize_bone_name(raw_name))
+        source_name = canonical_vmc_bone_name(raw_name)
         if source_name is not None and source_name not in canonical:
             canonical[source_name] = raw
     return canonical
@@ -467,13 +510,17 @@ def rebuild_maps(scene):
     state.cached_bone_map = {}
     state.cached_blend_map = {}
     state.cached_arkit_blend_map = {}
+    state.cached_blend_key_blocks = {}
+    state.cached_arkit_blend_key_blocks = {}
+    state.target_face_ref = face if has_shape_keys(face) else None
+    state.receiver_target_context = {}
 
     if arm is not None:
-        from . import arp as mapping_arp
+        from . import target_rig as mapping_target_rig
 
-        arp_analysis = mapping_arp.analyze_armature(arm)
-        if arp_analysis["is_arp"]:
-            state.cached_bone_map = mapping_arp.build_runtime_mapping(scene, arm)
+        runtime_mapping = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm)
+        if runtime_mapping:
+            state.cached_bone_map = runtime_mapping
         else:
             filled = autofill_empty_manual_overrides(scene, arm)
             if filled:

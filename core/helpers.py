@@ -1,4 +1,4 @@
-from mathutils import Quaternion, Vector
+from mathutils import Euler, Quaternion, Vector
 
 from . import constants
 
@@ -25,10 +25,16 @@ def normalize_bone_name(name: str) -> str:
     return "".join(ch for ch in base.lower() if ch.isalnum())
 
 
+def convert_vmc_location(px, py, pz):
+    return Vector((-px, -pz, py))
+
+
+def convert_vmc_quaternion(qx, qy, qz, qw):
+    return Quaternion((qw, qx, qz, -qy))
+
+
 def convert_vmc_pose(px, py, pz, qx, qy, qz, qw):
-    loc = Vector((-px, -pz, py))
-    quat = Quaternion((qw, qx, qz, -qy))
-    return loc, quat
+    return convert_vmc_location(px, py, pz), convert_vmc_quaternion(qx, qy, qz, qw)
 
 
 def vec_changed(current: Vector, target: Vector, eps: float = constants.LOC_EPS) -> bool:
@@ -37,6 +43,10 @@ def vec_changed(current: Vector, target: Vector, eps: float = constants.LOC_EPS)
 
 def quat_changed(current: Quaternion, target: Quaternion, eps: float = constants.ROT_EPS) -> bool:
     return (1.0 - abs(current.dot(target))) > eps
+
+
+def euler_changed(current: Euler, target: Euler, eps: float = constants.ROT_EPS) -> bool:
+    return sum(abs(float(current[index]) - float(target[index])) for index in range(3)) > eps
 
 
 def format_preview_pose(raw_pose):

@@ -2,9 +2,9 @@ import bpy
 from bpy.app.handlers import persistent
 
 from ..core import constants, state
-from ..mapping import arp as mapping_arp
 from ..mapping import mapper as mapping
 from ..mapping import preset_store as presets
+from ..mapping import target_rig as mapping_target_rig
 from ..preview import dummy_vrm
 
 
@@ -86,6 +86,17 @@ def _on_live_preview_changed(self, _context):
         state.dirty = True
 
 
+def _on_target_rig_type_changed(self, _context):
+    mapping.invalidate_bone_map_cache()
+    mapping_target_rig.clear_all_scene_reports(self)
+
+    arm = getattr(self, "vmc_link_armature", None)
+    if not mapping.has_pose_bones(arm):
+        return
+
+    mapping_target_rig.apply_selected_scene_mapping(self, arm, fallback_to_generic=False)
+
+
 def _on_face_source_changed(self, _context):
     state.next_tick_ts = 0.0
     mapping.invalidate_blend_map_cache()
@@ -97,7 +108,7 @@ def _on_face_source_changed(self, _context):
 
 def _on_armature_changed(self, _context):
     mapping.handle_armature_changed(self)
-    mapping_arp.clear_scene_report(self)
+    mapping_target_rig.clear_all_scene_reports(self)
 
 
 def _on_face_object_changed(self, _context):
@@ -111,6 +122,7 @@ FIXED_SCENE_PROPS = (
     "vmc_link_rate_hz",
     "vmc_link_live_preview",
     "vmc_link_lock_to_center",
+    "vmc_link_target_rig_type",
     "vmc_link_face_source",
     "vmc_link_arkit_port",
     "vmc_link_armature",
@@ -130,6 +142,9 @@ FIXED_SCENE_PROPS = (
     "vmc_link_arp_is_detected",
     "vmc_link_arp_report_title",
     "vmc_link_arp_report",
+    "vmc_link_mmd_is_detected",
+    "vmc_link_mmd_report_title",
+    "vmc_link_mmd_report",
 )
 
 
@@ -184,6 +199,17 @@ def ensure_scene_props():
         description="勾选时忽略 VMC 根位移，只在场景中心预览/驱动；取消勾选后按 VMC Root、Tra 或 Hips 位置移动角色",
         default=True,
         update=_on_live_preview_changed,
+    )
+    scene_type.vmc_link_target_rig_type = bpy.props.EnumProperty(
+        name="目标骨架类型",
+        description="切换目标骨架辅助工具和专用运行时策略",
+        items=(
+            ("GENERIC", "通用骨架", "使用通用骨骼映射"),
+            ("ARP", "Auto Rig Pro", "使用 ARP 专用检测、自动填充和运行时策略"),
+            ("MMD", "MMD", "使用 MMD 标准骨架检测与默认名表"),
+        ),
+        default="GENERIC",
+        update=_on_target_rig_type_changed,
     )
     scene_type.vmc_link_face_source = bpy.props.EnumProperty(
         name="面部来源",
@@ -300,6 +326,24 @@ def ensure_scene_props():
     scene_type.vmc_link_arp_report = bpy.props.StringProperty(
         name="ARP 报告内容",
         description="最近一次 Auto Rig Pro 检查报告内容",
+        default="",
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_mmd_is_detected = bpy.props.BoolProperty(
+        name="MMD 识别结果",
+        description="最近一次 MMD 标准骨架检查是否通过",
+        default=False,
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_mmd_report_title = bpy.props.StringProperty(
+        name="MMD 报告标题",
+        description="最近一次 MMD 标准骨架检查报告标题",
+        default="",
+        options={"HIDDEN"},
+    )
+    scene_type.vmc_link_mmd_report = bpy.props.StringProperty(
+        name="MMD 报告内容",
+        description="最近一次 MMD 标准骨架检查报告内容",
         default="",
         options={"HIDDEN"},
     )

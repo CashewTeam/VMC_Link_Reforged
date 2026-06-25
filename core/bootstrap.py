@@ -8,10 +8,13 @@ _needs_reload = "operators" in locals()
 from . import constants, helpers, state
 from ..mapping import arp as mapping_arp
 from ..mapping import mapper as mapping
+from ..mapping import mmd as mapping_mmd
 from ..mapping import preset_store as presets
+from ..mapping import target_rig as mapping_target_rig
 from ..preview import dummy_vrm
 from ..runtime import driver as runtime
 from ..runtime import network, properties
+from ..runtime import target_runtime
 from ..ui import (
     intermediate_panel as ui_intermediate,
     main_panel as ui_main,
@@ -30,11 +33,14 @@ if _needs_reload:
         dummy_vrm,
         mapping,
         mapping_arp,
+        mapping_mmd,
+        mapping_target_rig,
         network,
         operators,
         presets,
         properties,
         runtime,
+        target_runtime,
         ui_intermediate,
         ui_main,
         ui_mapping,

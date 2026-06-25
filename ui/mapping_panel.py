@@ -3,7 +3,9 @@ import bpy
 from ..core import constants
 from ..mapping import arp as mapping_arp
 from ..mapping import mapper as mapping
+from ..mapping import mmd as mapping_mmd
 from ..mapping import preset_store as presets
+from ..mapping import target_rig as mapping_target_rig
 
 
 def draw_mapping_preset_controls(layout, scene, kind: str):
@@ -71,7 +73,7 @@ def draw_arp_helper(layout, scene):
     box = layout.box()
     col = box.column(align=True)
     col.label(text="Auto Rig Pro 辅助", icon="ARMATURE_DATA")
-    col.label(text=f"内建预设：{mapping_arp.ARP_BUILTIN_PRESET_FILE}", icon="INFO")
+    col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_ARP).builtin_preset_file}", icon="INFO")
     arm_obj = getattr(scene, "vmc_link_armature", None)
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     if mapping_arp.analyze_armature(arm_obj)["is_arp"]:
@@ -100,6 +102,35 @@ def draw_arp_helper(layout, scene):
         report_box.label(text=_truncate_ui_line(line), icon="DOT")
 
 
+def draw_mmd_helper(layout, scene):
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text="MMD 辅助", icon="OUTLINER_OB_ARMATURE")
+    col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_MMD).builtin_preset_file}", icon="INFO")
+    col.label(text=f"默认名表: {len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
+    col.label(text="当前已接入 MMD 专用运行时入口", icon="INFO")
+    col.label(text="根位移写入 センター 骨，骨骼旋转按起始 pose delta + rest 轴重映射求值", icon="INFO")
+
+    row = col.row(align=True)
+    row.operator("vmc_link.inspect_mmd_rig", text="检查 MMD 骨架", icon="VIEWZOOM")
+    row.operator("vmc_link.autofill_mmd_bone_map", text="应用标准 MMD 映射", icon="SHADERFX")
+
+    validate_row = col.row(align=True)
+    validate_row.operator("vmc_link.validate_mmd_bone_map", text="校验当前映射", icon="CHECKMARK")
+
+    report_title = str(getattr(scene, "vmc_link_mmd_report_title", "")).strip()
+    report_text = str(getattr(scene, "vmc_link_mmd_report", "")).strip()
+    if not report_text:
+        col.label(text="先绑定目标骨架，再执行检查、自动填充或校验", icon="INFO")
+        return
+
+    report_box = col.box()
+    icon = "CHECKMARK" if bool(getattr(scene, "vmc_link_mmd_is_detected", False)) else "ERROR"
+    report_box.label(text=report_title or "MMD 报告", icon=icon)
+    for line in report_text.splitlines():
+        report_box.label(text=_truncate_ui_line(line), icon="DOT")
+
+
 class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
     bl_label = "骨骼映射"
     bl_idname = "VMC_LINK_PT_bone_mapping_panel"
@@ -112,7 +143,30 @@ class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        draw_arp_helper(layout, scene)
+        layout.prop(scene, "vmc_link_target_rig_type", text="目标骨架类型")
+        arm_obj = getattr(scene, "vmc_link_armature", None)
+        rig_info = mapping_target_rig.analyze_scene_target(scene, arm_obj)
+        rig_type = str(rig_info["selected_rig"]).upper()
+        runtime_rig = str(rig_info["resolved_rig"]).upper()
+        runtime_strategy = str(rig_info["runtime_strategy"]).upper()
+        state_box = layout.box()
+        state_box.label(text=f"运行时目标类型: {runtime_rig}", icon="INFO")
+        state_box.label(text=f"运行时驱动策略: {runtime_strategy}", icon="INFO")
+        if rig_type == "ARP" and rig_info["resolved_rig"] != mapping_target_rig.TARGET_RIG_ARP:
+            state_box.label(text="当前目标骨架未识别为 ARP，运行时将回退到通用骨架路径", icon="ERROR")
+        if rig_type == "MMD":
+            if rig_info["resolved_rig"] != mapping_target_rig.TARGET_RIG_MMD:
+                state_box.label(text="当前目标骨架未识别为 MMD，运行时将回退到通用骨架路径", icon="ERROR")
+            else:
+                state_box.label(text="当前 MMD 类型已接入专用运行时入口", icon="CHECKMARK")
+        if rig_type == "ARP":
+            draw_arp_helper(layout, scene)
+        elif rig_type == "MMD":
+            draw_mmd_helper(layout, scene)
+        else:
+            info_box = layout.box()
+            info_box.label(text="通用骨架模式", icon="INFO")
+            info_box.label(text="当前只显示通用骨骼映射与 JSON 预设")
         draw_mapping_preset_controls(layout, scene, constants.MAPPING_KIND_BONE)
         draw_bone_mapping_entries(layout, scene)
 

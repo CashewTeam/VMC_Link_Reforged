@@ -1,0 +1,905 @@
+import math
+
+from mathutils import Matrix, Quaternion, Vector
+
+from ..core import constants, helpers, state
+from ..mapping import arp as mapping_arp
+from ..mapping import mapper as mapping
+from ..mapping import target_rig as mapping_target_rig
+
+def _empty_target_sample(_arm_obj, face_obj):
+    return {
+        "arm": None,
+        "bones": {},
+        "shape_datablock": face_obj.data.shape_keys if mapping.has_shape_keys(face_obj) else None,
+        "shapes": {},
+        "ik_fk_switches": {},
+        "ik_fk_pose_bones": {},
+        "shape_blocks": {},
+    }
+
+
+def _ensure_arm_sample(sample):
+    arm_sample = sample.get("arm")
+    if arm_sample is not None:
+        return arm_sample
+    arm_sample = {}
+    sample["arm"] = arm_sample
+    return arm_sample
+
+
+def _ensure_bone_sample(sample, pose_bone):
+    bone_sample = sample["bones"].get(pose_bone.name)
+    if bone_sample is not None:
+        return bone_sample
+
+    bone_sample = {
+        "pose_bone": pose_bone,
+    }
+    sample["bones"][pose_bone.name] = bone_sample
+    return bone_sample
+
+
+def _select_root_motion_pose(root, waist, bones, include_hips: bool):
+    hips_pose = mapping.get_vmc_bone_pose(bones, "Hips") if include_hips else None
+    if root is not None and (_root_motion_has_position(root) or hips_pose is None):
+        return "Root/Pos", root
+    if waist is not None and (_root_motion_has_position(waist) or hips_pose is None):
+        return "Tra/Pos", waist
+    if include_hips and hips_pose is not None:
+        return "Bone/Pos:Hips", hips_pose
+    if root is not None:
+        return "Root/Pos", root
+    if waist is not None:
+        return "Tra/Pos", waist
+    return None, None
+
+
+def _root_motion_location(raw):
+    if raw is None:
+        return None
+    return helpers.convert_vmc_location(raw[0], raw[1], raw[2])
+
+
+def _root_motion_has_position(raw) -> bool:
+    location = _root_motion_location(raw)
+    return location is not None and location.length > constants.LOC_EPS
+
+
+def _quat_angle_degrees(a, b) -> float:
+    dot = max(-1.0, min(1.0, abs(a.dot(b))))
+    return 2.0 * math.degrees(math.acos(dot))
+
+
+def _filter_rotation(filtered_rotations, key: str, desired_rotation):
+    previous = filtered_rotations.get(key)
+    if previous is None:
+        filtered_rotations[key] = desired_rotation.copy()
+        return desired_rotation
+
+    angle = _quat_angle_degrees(previous, desired_rotation)
+    if angle <= constants.ARP_ROTATION_FILTER_DEADBAND_DEG:
+        return previous.copy()
+    if angle >= constants.ARP_ROTATION_FILTER_FAST_ANGLE_DEG:
+        filtered_rotations[key] = desired_rotation.copy()
+        return desired_rotation
+
+    t = angle / constants.ARP_ROTATION_FILTER_FAST_ANGLE_DEG
+    alpha = constants.ARP_ROTATION_FILTER_MIN_ALPHA + (1.0 - constants.ARP_ROTATION_FILTER_MIN_ALPHA) * t
+    filtered = previous.slerp(desired_rotation, alpha)
+    filtered.normalize()
+    filtered_rotations[key] = filtered.copy()
+    return filtered
+
+
+def _source_local_rotation_from_pose(raw_pose, source_start_basis=None, source_rest=None, source_rest_inv=None, source_bone=None):
+    if raw_pose is None:
+        if source_start_basis is not None:
+            return source_start_basis.copy()
+        return Quaternion()
+
+    world_rotation = helpers.convert_vmc_quaternion(raw_pose[3], raw_pose[4], raw_pose[5], raw_pose[6])
+    if source_rest is None or source_rest_inv is None:
+        if source_bone is None:
+            return world_rotation
+        source_rest = source_bone.bone.matrix_local.to_quaternion()
+        source_rest.normalize()
+        source_rest_inv = source_rest.inverted()
+    local_rotation = source_rest_inv @ world_rotation @ source_rest
+    local_rotation.normalize()
+    return local_rotation
+
+
+def _source_world_rotation_from_pose(raw_pose, source_start_rotation=None):
+    if raw_pose is None:
+        if source_start_rotation is not None:
+            return source_start_rotation.copy()
+        return Quaternion()
+    world_rotation = helpers.convert_vmc_quaternion(raw_pose[3], raw_pose[4], raw_pose[5], raw_pose[6])
+    world_rotation.normalize()
+    return world_rotation
+
+
+def _resolve_arp_copy_transforms_matrix(pose_bone_name: str, desired_matrices, copy_transforms_targets):
+    subtarget = copy_transforms_targets.get(pose_bone_name)
+    if subtarget:
+        desired_matrix = desired_matrices.get(subtarget)
+        if desired_matrix is not None:
+            return desired_matrix
+    return None
+
+
+def _resolve_arp_child_of_matrix(pose_bone_name: str, desired_matrices, child_of_targets):
+    subtarget = child_of_targets.get(pose_bone_name)
+    if subtarget:
+        desired_matrix = desired_matrices.get(subtarget)
+        if desired_matrix is not None:
+            return desired_matrix
+    return None
+
+
+def _apply_arp_copy_location_matrix(pose_bone_name: str, matrix, desired_matrices, copy_location_rules):
+    rules = copy_location_rules.get(pose_bone_name, ())
+    if not rules:
+        return matrix
+    location = matrix.to_translation()
+    changed = False
+    for subtarget, influence, use_x, use_y, use_z in rules:
+        target_matrix = desired_matrices.get(subtarget)
+        if target_matrix is None:
+            continue
+        target_location = target_matrix.to_translation()
+        if use_x:
+            location.x = location.x + (target_location.x - location.x) * influence
+            changed = True
+        if use_y:
+            location.y = location.y + (target_location.y - location.y) * influence
+            changed = True
+        if use_z:
+            location.z = location.z + (target_location.z - location.z) * influence
+            changed = True
+    if not changed:
+        return matrix
+    return Matrix.LocRotScale(location, matrix.to_quaternion(), matrix.to_scale())
+
+
+def _calculate_arp_target_pose_matrix(
+    pose_bone,
+    cache,
+    desired_matrices,
+    copy_transforms_targets,
+    child_of_targets,
+    copy_location_rules,
+):
+    bone_name = pose_bone.name
+    cached = cache.get(bone_name)
+    if cached is not None:
+        return cached
+
+    desired_matrix = desired_matrices.get(bone_name)
+    if desired_matrix is not None:
+        cache[bone_name] = desired_matrix
+        return desired_matrix
+
+    copied_matrix = _resolve_arp_copy_transforms_matrix(bone_name, desired_matrices, copy_transforms_targets)
+    if copied_matrix is not None:
+        cache[bone_name] = copied_matrix
+        return copied_matrix
+
+    child_of_matrix = _resolve_arp_child_of_matrix(bone_name, desired_matrices, child_of_targets)
+    if child_of_matrix is not None:
+        cache[bone_name] = _apply_arp_copy_location_matrix(
+            bone_name,
+            child_of_matrix,
+            desired_matrices,
+            copy_location_rules,
+        )
+        return cache[bone_name]
+
+    matrix = pose_bone.matrix.copy()
+    cache[bone_name] = _apply_arp_copy_location_matrix(bone_name, matrix, desired_matrices, copy_location_rules)
+    return cache[bone_name]
+
+
+def _remap_local_delta_with_rest_quaternions(source_rest, source_rest_inv, target_rest, target_rest_inv, source_delta):
+    world_delta = source_rest @ source_delta @ source_rest_inv
+    world_delta.normalize()
+    target_delta = target_rest_inv @ world_delta @ target_rest
+    target_delta.normalize()
+    return target_delta
+
+
+def _compute_eye_look_quaternion(look_h: float, look_v: float):
+    look_h = max(-1.0, min(1.0, look_h))
+    look_v = max(-1.0, min(1.0, look_v))
+    yaw = look_h * 1.0
+    pitch = -look_v * 1.0
+    q_yaw = Quaternion((0.0, 1.0, 0.0), yaw)
+    q_pitch = Quaternion((1.0, 0.0, 0.0), pitch)
+    rotation = q_yaw @ q_pitch
+    rotation.normalize()
+    return rotation
+
+
+def _canonical_blend_value(canonical_blends, blends, name: str) -> float:
+    if canonical_blends:
+        try:
+            return float(canonical_blends.get(name, 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return mapping.get_blend_value(blends, name)
+
+
+def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, lock_to_center: bool):
+    if arm_obj is None or context.get("target_start_world") is None:
+        return
+
+    if lock_to_center and context.get("is_arp"):
+        context["root_source"] = None
+        context["root_baseline_location"] = None
+        context["root_baseline_rotation"] = None
+        traj_bone = context.get("arp_traj_bone")
+        start_location = context.get("arp_traj_start_location")
+        if traj_bone is not None and start_location is not None:
+            bone_sample = _ensure_bone_sample(sample, traj_bone)
+            bone_sample["location"] = start_location.copy()
+        return
+    if lock_to_center and context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        center_bone = context.get("mmd_center_bone")
+        start_location = context.get("mmd_center_start_location")
+        if center_bone is not None and start_location is not None:
+            bone_sample = _ensure_bone_sample(sample, center_bone)
+            bone_sample["location"] = start_location.copy()
+        return
+
+    source_name, raw = _select_root_motion_pose(root, waist, bones, include_hips=not lock_to_center)
+    if raw is None:
+        return
+
+    current_location, current_rotation = helpers.convert_vmc_pose(*raw)
+    if context.get("root_source") != source_name:
+        context["root_source"] = source_name
+        context["root_baseline_location"] = current_location.copy()
+        context["root_baseline_rotation"] = current_rotation.copy()
+
+    baseline_location = context["root_baseline_location"]
+    baseline_rotation = context["root_baseline_rotation"]
+    delta_location = current_location - baseline_location
+    if source_name == "Bone/Pos:Hips":
+        delta_rotation = Matrix.Identity(3).to_quaternion()
+    else:
+        delta_rotation = current_rotation @ baseline_rotation.inverted()
+        delta_rotation.normalize()
+    if lock_to_center:
+        delta_location = Vector((0.0, 0.0, 0.0))
+
+    if context.get("is_arp"):
+        traj_bone = context.get("arp_traj_bone")
+        start_location = context.get("arp_traj_start_location")
+        if traj_bone is None or start_location is None:
+            return
+        local_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
+        local_delta = Vector((-local_delta.x, -local_delta.y, local_delta.z))
+        bone_sample = _ensure_bone_sample(sample, traj_bone)
+        bone_sample["location"] = start_location + local_delta
+        return
+    if context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        center_bone = context.get("mmd_center_bone")
+        start_location = context.get("mmd_center_start_location")
+        if center_bone is None or start_location is None:
+            return
+        local_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
+        bone_sample = _ensure_bone_sample(sample, center_bone)
+        bone_sample["location"] = start_location + local_delta
+        return
+
+    start_location = context.get("target_start_world_location")
+    start_rotation = context.get("target_start_world_rotation")
+    start_scale = context.get("target_start_world_scale")
+    if start_location is None or start_rotation is None or start_scale is None:
+        start_location, start_rotation, start_scale = context["target_start_world"].decompose()
+    desired_world = Matrix.LocRotScale(
+        start_location + delta_location,
+        delta_rotation @ start_rotation,
+        start_scale,
+    )
+    desired_location, desired_rotation, _desired_scale = desired_world.decompose()
+    arm_sample = _ensure_arm_sample(sample)
+    arm_sample["location"] = desired_location.copy()
+    arm_sample["rotation_quaternion"] = desired_rotation
+
+
+def _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample, target_context=None):
+    if arm_obj is None or getattr(arm_obj, "pose", None) is None:
+        return
+
+    pose = arm_obj.pose.bones
+    runtime_entries = (target_context or {}).get("generic_runtime_entries", ())
+    eye_left_name = (target_context or {}).get("eye_left_name") or state.cached_bone_map.get("LeftEye") or mapping.find_bone_name(arm_obj, "LeftEye", scene)
+    eye_right_name = (target_context or {}).get("eye_right_name") or state.cached_bone_map.get("RightEye") or mapping.find_bone_name(arm_obj, "RightEye", scene)
+    if eye_left_name:
+        state.cached_bone_map["LeftEye"] = eye_left_name
+    if eye_right_name:
+        state.cached_bone_map["RightEye"] = eye_right_name
+
+    eye_left_driven_by_bone = False
+    eye_right_driven_by_bone = False
+
+    if runtime_entries:
+        if dirty_bone_names:
+            entries_by_source = (target_context or {}).get("generic_runtime_entries_by_source", {})
+            entry_iter = (
+                (*entry, bones.get(source_name))
+                for source_name in dirty_bone_names
+                for entry in (entries_by_source.get(source_name),)
+                if entry is not None
+            )
+        else:
+            entry_iter = (
+                (vmc_name, pose_bone, target_rest, target_rest_inv, bones.get(vmc_name))
+                for vmc_name, pose_bone, target_rest, target_rest_inv in runtime_entries
+            )
+    else:
+        entry_iter = []
+        for vmc_name, raw in bones.items():
+            actual = state.cached_bone_map.get(vmc_name) or mapping.find_bone_name(arm_obj, vmc_name, scene)
+            if not actual or actual not in pose:
+                continue
+            state.cached_bone_map[vmc_name] = actual
+            pose_bone = pose[actual]
+            target_rest = pose_bone.bone.matrix_local.to_quaternion()
+            target_rest.normalize()
+            entry_iter.append((vmc_name, pose_bone, target_rest, target_rest.inverted(), raw))
+
+    for vmc_name, pose_bone, target_rest, target_rest_inv, raw in entry_iter:
+        if raw is None:
+            continue
+        px, py, pz, qx, qy, qz, qw = raw
+        rotate_quat = helpers.convert_vmc_quaternion(qx, qy, qz, qw)
+        local_q = target_rest_inv @ rotate_quat @ target_rest
+        local_q.normalize()
+
+        bone_sample = _ensure_bone_sample(sample, pose_bone)
+        bone_sample["rotation_quaternion"] = local_q
+        if eye_left_name and pose_bone.name == eye_left_name:
+            eye_left_driven_by_bone = True
+        if eye_right_name and pose_bone.name == eye_right_name:
+            eye_right_driven_by_bone = True
+
+    if not blends and not canonical_blends:
+        return
+
+    if eye_left_name and eye_left_name in pose and not eye_left_driven_by_bone:
+        left_h = (_canonical_blend_value(canonical_blends, blends, "LookRight_L") or _canonical_blend_value(canonical_blends, blends, "LookRight")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookLeft_L") or _canonical_blend_value(canonical_blends, blends, "LookLeft")
+        )
+        left_v = (_canonical_blend_value(canonical_blends, blends, "LookUp_L") or _canonical_blend_value(canonical_blends, blends, "LookUp")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookDown_L") or _canonical_blend_value(canonical_blends, blends, "LookDown")
+        )
+        bone_sample = _ensure_bone_sample(sample, pose[eye_left_name])
+        bone_sample["rotation_quaternion"] = _compute_eye_look_quaternion(left_h, left_v)
+
+    if eye_right_name and eye_right_name in pose and not eye_right_driven_by_bone:
+        right_h = (_canonical_blend_value(canonical_blends, blends, "LookRight_R") or _canonical_blend_value(canonical_blends, blends, "LookRight")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookLeft_R") or _canonical_blend_value(canonical_blends, blends, "LookLeft")
+        )
+        right_v = (_canonical_blend_value(canonical_blends, blends, "LookUp_R") or _canonical_blend_value(canonical_blends, blends, "LookUp")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookDown_R") or _canonical_blend_value(canonical_blends, blends, "LookDown")
+        )
+        bone_sample = _ensure_bone_sample(sample, pose[eye_right_name])
+        bone_sample["rotation_quaternion"] = _compute_eye_look_quaternion(right_h, right_v)
+
+
+def _evaluate_eye_look_target_bones(scene, arm_obj, blends, canonical_blends, sample, bones=None, target_context=None):
+    if arm_obj is None or getattr(arm_obj, "pose", None) is None or (not blends and not canonical_blends):
+        return
+
+    pose = arm_obj.pose.bones
+    eye_left_name = (target_context or {}).get("eye_left_name") or state.cached_bone_map.get("LeftEye") or mapping.find_bone_name(arm_obj, "LeftEye", scene)
+    eye_right_name = (target_context or {}).get("eye_right_name") or state.cached_bone_map.get("RightEye") or mapping.find_bone_name(arm_obj, "RightEye", scene)
+    if eye_left_name:
+        state.cached_bone_map["LeftEye"] = eye_left_name
+    if eye_right_name:
+        state.cached_bone_map["RightEye"] = eye_right_name
+
+    bones = bones or {}
+
+    if eye_left_name and eye_left_name in pose and "LeftEye" not in bones:
+        left_h = (_canonical_blend_value(canonical_blends, blends, "LookRight_L") or _canonical_blend_value(canonical_blends, blends, "LookRight")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookLeft_L") or _canonical_blend_value(canonical_blends, blends, "LookLeft")
+        )
+        left_v = (_canonical_blend_value(canonical_blends, blends, "LookUp_L") or _canonical_blend_value(canonical_blends, blends, "LookUp")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookDown_L") or _canonical_blend_value(canonical_blends, blends, "LookDown")
+        )
+        bone_sample = _ensure_bone_sample(sample, pose[eye_left_name])
+        bone_sample["rotation_quaternion"] = _compute_eye_look_quaternion(left_h, left_v)
+
+    if eye_right_name and eye_right_name in pose and "RightEye" not in bones:
+        right_h = (_canonical_blend_value(canonical_blends, blends, "LookRight_R") or _canonical_blend_value(canonical_blends, blends, "LookRight")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookLeft_R") or _canonical_blend_value(canonical_blends, blends, "LookLeft")
+        )
+        right_v = (_canonical_blend_value(canonical_blends, blends, "LookUp_R") or _canonical_blend_value(canonical_blends, blends, "LookUp")) - (
+            _canonical_blend_value(canonical_blends, blends, "LookDown_R") or _canonical_blend_value(canonical_blends, blends, "LookDown")
+        )
+        bone_sample = _ensure_bone_sample(sample, pose[eye_right_name])
+        bone_sample["rotation_quaternion"] = _compute_eye_look_quaternion(right_h, right_v)
+
+
+def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample, context):
+    if arm_obj is None or getattr(arm_obj, "pose", None) is None:
+        return
+
+    entries = context.get("mmd_runtime_entries", ()) if context is not None else ()
+    if not entries:
+        _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample)
+        return
+
+    if dirty_bone_names:
+        entries_by_source = (context or {}).get("mmd_runtime_entries_by_source", {})
+        entry_iter = (
+            entries_by_source[source_name]
+            for source_name in dirty_bone_names
+            if source_name in entries_by_source
+        )
+    else:
+        entry_iter = entries
+
+    for (
+        source_name,
+        _target_name,
+        source_bone,
+        target_bone,
+        source_rest,
+        source_rest_inv,
+        target_rest,
+        target_rest_inv,
+        source_start_basis_rotation,
+        source_start_basis_rotation_inv,
+        target_start_basis_rotation,
+    ) in entry_iter:
+        if source_bone is None or target_bone is None:
+            continue
+
+        source_rotation = _source_local_rotation_from_pose(
+            bones.get(source_name),
+            source_start_basis_rotation,
+            source_rest,
+            source_rest_inv,
+            source_bone,
+        )
+        source_delta = source_rotation @ source_start_basis_rotation_inv
+        source_delta.normalize()
+        target_delta = _remap_local_delta_with_rest_quaternions(
+            source_rest,
+            source_rest_inv,
+            target_rest,
+            target_rest_inv,
+            source_delta,
+        )
+        desired_rotation = target_delta @ target_start_basis_rotation
+        desired_rotation.normalize()
+
+        bone_sample = _ensure_bone_sample(sample, target_bone)
+        bone_sample["rotation_quaternion"] = desired_rotation
+
+    _evaluate_eye_look_target_bones(scene, arm_obj, blends, canonical_blends, sample, bones, context)
+
+
+def _evaluate_target_shapes(scene, face_obj, use_arkit_face, blends, canonical_blends, arkit_blends, dirty_vmc_blend_names, dirty_arkit_blend_names, sample):
+    if not mapping.has_shape_keys(face_obj):
+        return
+
+    if not use_arkit_face:
+        source_blends = canonical_blends or blends
+        if dirty_vmc_blend_names:
+            blend_iter = (
+                (vmc_name, source_blends[vmc_name])
+                for vmc_name in dirty_vmc_blend_names
+                if vmc_name in source_blends
+            )
+        else:
+            blend_iter = source_blends.items()
+        for vmc_name, value in blend_iter:
+            key_block = state.cached_blend_key_blocks.get(vmc_name)
+            actual = state.cached_blend_map.get(vmc_name)
+            if key_block is None:
+                actual = actual or mapping.find_shapekey_name(face_obj, vmc_name, scene)
+                if not actual:
+                    continue
+                blocks = face_obj.data.shape_keys.key_blocks
+                key_block = blocks.get(actual)
+                if key_block is None:
+                    continue
+                state.cached_blend_map[vmc_name] = actual
+                state.cached_blend_key_blocks[vmc_name] = key_block
+            sample["shapes"][actual] = float(value)
+            sample["shape_blocks"][actual] = key_block
+        return
+
+    if dirty_arkit_blend_names:
+        blend_iter = (
+            (arkit_name, arkit_blends[arkit_name])
+            for arkit_name in dirty_arkit_blend_names
+            if arkit_name in arkit_blends
+        )
+    else:
+        blend_iter = arkit_blends.items()
+    for arkit_name, value in blend_iter:
+        key_block = state.cached_arkit_blend_key_blocks.get(arkit_name)
+        actual = state.cached_arkit_blend_map.get(arkit_name)
+        if key_block is None:
+            actual = actual or mapping.find_arkit_shapekey_name(face_obj, arkit_name, scene)
+            if not actual:
+                continue
+            blocks = face_obj.data.shape_keys.key_blocks
+            key_block = blocks.get(actual)
+            if key_block is None:
+                continue
+            state.cached_arkit_blend_map[arkit_name] = actual
+            state.cached_arkit_blend_key_blocks[arkit_name] = key_block
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        sample["shapes"][actual] = numeric_value
+        sample["shape_blocks"][actual] = key_block
+
+
+def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sample):
+    if arm_obj is None or getattr(arm_obj, "pose", None) is None:
+        return
+
+    target_pose_matrices = context.setdefault("arp_target_pose_matrices", {})
+    desired_target_matrices = context.setdefault("arp_desired_target_matrices", {})
+    target_pose_matrices.clear()
+    desired_target_matrices.clear()
+    filtered_source_rotations = context.setdefault("arp_filtered_source_rotations", {})
+    filtered_rotations = context.setdefault("arp_filtered_rotations", {})
+    copy_transforms_targets = context.get("arp_copy_transforms_targets", {})
+    child_of_targets = context.get("arp_child_of_targets", {})
+    copy_location_rules = context.get("arp_copy_location_rules", {})
+    for bone_name, pose_bone in context.get("arp_ik_fk_pose_bones", ()):
+        sample["ik_fk_switches"][bone_name] = 1.0
+        sample["ik_fk_pose_bones"][bone_name] = pose_bone
+
+    if dirty_bone_names:
+        entries_by_source = context.get("arp_runtime_entries_by_source", {})
+        order_index_by_source = context.get("arp_runtime_order_index_by_source", {})
+        entry_iter = (
+            entries_by_source[source_name]
+            for source_name in sorted(
+                (
+                    source_name
+                    for source_name in dirty_bone_names
+                    if source_name in entries_by_source
+                ),
+                key=lambda source_name: order_index_by_source.get(source_name, 1 << 30),
+            )
+        )
+    else:
+        entry_iter = context.get("arp_runtime_entries", ())
+
+    for (
+        source_name,
+        target_name,
+        source_bone,
+        target_bone,
+        calibration,
+        uses_local_basis_delta,
+        uses_delta_rotation,
+        uses_rest_axis_remap,
+        source_start_basis_rotation,
+        target_start_basis_rotation,
+        source_start_rotation,
+        source_start_rotation_inv,
+        target_start_rotation,
+        start_location,
+        start_scale,
+        target_bone_ref,
+        target_matrix_local,
+        parent_bone,
+        has_parent,
+        parent_matrix_local,
+        needs_pose_target_matrix,
+        source_rest,
+        source_rest_inv,
+        target_rest,
+        target_rest_inv,
+    ) in entry_iter:
+        raw_pose = bones.get(source_name)
+        if uses_local_basis_delta:
+            if source_start_rotation is None or target_start_rotation is None:
+                continue
+            source_rotation = _source_local_rotation_from_pose(
+                raw_pose,
+                source_start_basis_rotation,
+                source_rest,
+                source_rest_inv,
+                source_bone,
+            )
+            source_delta = source_rotation @ source_start_rotation_inv
+            source_delta.normalize()
+            if uses_rest_axis_remap:
+                source_delta = _remap_local_delta_with_rest_quaternions(
+                    source_rest,
+                    source_rest_inv,
+                    target_rest,
+                    target_rest_inv,
+                    source_delta,
+                )
+            desired_rotation = source_delta @ target_start_rotation
+            desired_rotation.normalize()
+            desired_rotation = _filter_rotation(filtered_rotations, target_name, desired_rotation)
+            bone_sample = _ensure_bone_sample(sample, target_bone)
+            bone_sample["rotation_quaternion"] = desired_rotation
+            continue
+
+        source_rotation = _source_world_rotation_from_pose(raw_pose, source_start_rotation)
+        source_rotation = _filter_rotation(filtered_source_rotations, source_name, source_rotation)
+        if uses_delta_rotation:
+            if source_start_rotation is None or target_start_rotation is None:
+                continue
+            source_delta = source_rotation @ source_start_rotation_inv
+            source_delta.normalize()
+            desired_rotation = source_delta @ target_start_rotation
+        else:
+            desired_rotation = source_rotation @ calibration
+        desired_rotation.normalize()
+        if start_location is None or start_scale is None:
+            start_matrix = target_bone.matrix.copy()
+            start_location = start_matrix.to_translation()
+            start_scale = start_matrix.to_scale()
+        desired_matrix = Matrix.LocRotScale(
+            start_location,
+            desired_rotation,
+            start_scale,
+        )
+        parent_matrix = None
+        if not has_parent:
+            basis_matrix = target_bone_ref.convert_local_to_pose(
+                desired_matrix,
+                target_matrix_local,
+                invert=True,
+            )
+        else:
+            parent_matrix = _calculate_arp_target_pose_matrix(
+                parent_bone,
+                target_pose_matrices,
+                desired_target_matrices,
+                copy_transforms_targets,
+                child_of_targets,
+                copy_location_rules,
+            )
+            basis_matrix = target_bone_ref.convert_local_to_pose(
+                desired_matrix,
+                target_matrix_local,
+                parent_matrix=parent_matrix,
+                parent_matrix_local=parent_matrix_local,
+                invert=True,
+            )
+        basis_rotation = basis_matrix.to_quaternion()
+        basis_rotation.normalize()
+        basis_rotation = _filter_rotation(filtered_rotations, target_name, basis_rotation)
+        if needs_pose_target_matrix:
+            filtered_basis_matrix = Matrix.LocRotScale(
+                basis_matrix.to_translation(),
+                basis_rotation,
+                basis_matrix.to_scale(),
+            )
+            if not has_parent:
+                effective_matrix = target_bone_ref.convert_local_to_pose(
+                    filtered_basis_matrix,
+                    target_matrix_local,
+                )
+            else:
+                effective_matrix = target_bone_ref.convert_local_to_pose(
+                    filtered_basis_matrix,
+                    target_matrix_local,
+                    parent_matrix=parent_matrix,
+                    parent_matrix_local=parent_matrix_local,
+                )
+            desired_target_matrices[target_name] = _apply_arp_copy_location_matrix(
+                target_name,
+                effective_matrix,
+                desired_target_matrices,
+                copy_location_rules,
+            )
+        bone_sample = _ensure_bone_sample(sample, target_bone)
+        bone_sample["rotation_quaternion"] = basis_rotation
+
+
+def _evaluate_target_armature(scene, arm_obj, preview_arm, bones, dirty_bone_names, blends, canonical_blends, target_context, sample):
+    runtime_strategy = mapping_target_rig.resolve_runtime_strategy(arm_obj, target_context)
+    if runtime_strategy == mapping_target_rig.RUNTIME_STRATEGY_ARP:
+        _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, target_context or {}, sample)
+        return
+    if runtime_strategy == mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample, target_context or {})
+        return
+    _evaluate_generic_target_armature(scene, arm_obj, bones, dirty_bone_names, blends, canonical_blends, sample, target_context or {})
+
+
+def evaluate_target_sample(
+    scene,
+    arm_obj,
+    face_obj,
+    preview_arm,
+    root,
+    waist,
+    bones,
+    dirty_bone_names,
+    blends,
+    canonical_vmc_blends,
+    arkit_blends,
+    dirty_vmc_blend_names,
+    dirty_arkit_blend_names,
+    lock_to_center: bool,
+    use_arkit_face: bool,
+    target_context,
+    evaluate_root_motion: bool = True,
+    evaluate_armature: bool = True,
+    evaluate_shapes: bool = True,
+):
+    sample = _empty_target_sample(arm_obj, face_obj)
+
+    if arm_obj is not None and evaluate_root_motion:
+        _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, target_context or {}, lock_to_center)
+    if arm_obj is not None and evaluate_armature:
+        _evaluate_target_armature(scene, arm_obj, preview_arm, bones, dirty_bone_names, blends, canonical_vmc_blends, target_context, sample)
+
+    if evaluate_shapes:
+        _evaluate_target_shapes(
+            scene,
+            face_obj,
+            use_arkit_face,
+            blends,
+            canonical_vmc_blends,
+            arkit_blends,
+            dirty_vmc_blend_names,
+            dirty_arkit_blend_names,
+            sample,
+        )
+    return sample
+
+
+def _as_float_tuple(values):
+    return tuple(float(value) for value in values)
+
+
+def _vec_values_changed(current, values, eps: float = constants.LOC_EPS) -> bool:
+    dx = float(current[0]) - float(values[0])
+    dy = float(current[1]) - float(values[1])
+    dz = float(current[2]) - float(values[2])
+    return (dx * dx + dy * dy + dz * dz) > (eps * eps)
+
+
+def _quat_values_changed(current, values, eps: float = constants.ROT_EPS) -> bool:
+    current_dot = (
+        float(current[0]) * float(values[0])
+        + float(current[1]) * float(values[1])
+        + float(current[2]) * float(values[2])
+        + float(current[3]) * float(values[3])
+    )
+    return (1.0 - abs(current_dot)) > eps
+
+
+def _ensure_target_apply_cache(arm_obj, face_obj):
+    if state.receiver_target_apply_armature_ref is not arm_obj:
+        state.receiver_target_apply_armature_ref = arm_obj
+        state.receiver_target_apply_arm_location = None
+        state.receiver_target_apply_arm_rotation = None
+        state.receiver_target_apply_bone_locations = {}
+        state.receiver_target_apply_bone_rotations = {}
+        state.receiver_target_apply_ik_fk_switches = {}
+    if state.receiver_target_apply_face_ref is not face_obj:
+        state.receiver_target_apply_face_ref = face_obj
+        state.receiver_target_apply_shape_values = {}
+
+
+def apply_target_sample(arm_obj, face_obj, sample):
+    _ensure_target_apply_cache(arm_obj, face_obj)
+    changed = False
+
+    if arm_obj is not None:
+        arm_sample = sample["arm"]
+        if arm_sample is not None:
+            desired_location = arm_sample.get("location")
+            if desired_location is not None:
+                cached_location = state.receiver_target_apply_arm_location
+                if cached_location is None:
+                    cached_location = _as_float_tuple(arm_obj.location)
+                if _vec_values_changed(cached_location, desired_location):
+                    arm_obj.location = desired_location
+                    state.receiver_target_apply_arm_location = (
+                        float(desired_location[0]),
+                        float(desired_location[1]),
+                        float(desired_location[2]),
+                    )
+                    changed = True
+                else:
+                    state.receiver_target_apply_arm_location = cached_location
+            desired_rotation = arm_sample.get("rotation_quaternion")
+            if desired_rotation is not None:
+                cached_rotation = state.receiver_target_apply_arm_rotation
+                if cached_rotation is None:
+                    cached_rotation = _as_float_tuple(arm_obj.rotation_quaternion)
+                if _quat_values_changed(cached_rotation, desired_rotation):
+                    arm_obj.rotation_quaternion = desired_rotation
+                    state.receiver_target_apply_arm_rotation = (
+                        float(desired_rotation[0]),
+                        float(desired_rotation[1]),
+                        float(desired_rotation[2]),
+                        float(desired_rotation[3]),
+                    )
+                    changed = True
+                else:
+                    state.receiver_target_apply_arm_rotation = cached_rotation
+
+        ik_fk_pose_bones = sample.get("ik_fk_pose_bones", {})
+        for bone_name, switch_value in sample.get("ik_fk_switches", {}).items():
+            pose_bone = ik_fk_pose_bones.get(bone_name)
+            if pose_bone is None or "ik_fk_switch" not in pose_bone:
+                continue
+            cached_switch = state.receiver_target_apply_ik_fk_switches.get(bone_name)
+            if cached_switch is None:
+                cached_switch = float(pose_bone["ik_fk_switch"])
+            numeric_switch = float(switch_value)
+            if abs(float(cached_switch) - numeric_switch) > constants.SHAPE_EPS:
+                pose_bone["ik_fk_switch"] = float(switch_value)
+                state.receiver_target_apply_ik_fk_switches[bone_name] = numeric_switch
+                changed = True
+            else:
+                state.receiver_target_apply_ik_fk_switches[bone_name] = cached_switch
+
+        for bone_name, bone_sample in sample.get("bones", {}).items():
+            pose_bone = bone_sample.get("pose_bone")
+            if pose_bone is None:
+                continue
+            desired_location = bone_sample.get("location")
+            if desired_location is not None:
+                cached_location = state.receiver_target_apply_bone_locations.get(bone_name)
+                if cached_location is None:
+                    cached_location = _as_float_tuple(pose_bone.location)
+                if _vec_values_changed(cached_location, desired_location):
+                    pose_bone.location = desired_location
+                    state.receiver_target_apply_bone_locations[bone_name] = (
+                        float(desired_location[0]),
+                        float(desired_location[1]),
+                        float(desired_location[2]),
+                    )
+                    changed = True
+                else:
+                    state.receiver_target_apply_bone_locations[bone_name] = cached_location
+            desired_rotation = bone_sample.get("rotation_quaternion")
+            if desired_rotation is not None:
+                cached_rotation = state.receiver_target_apply_bone_rotations.get(bone_name)
+                if cached_rotation is None:
+                    cached_rotation = _as_float_tuple(pose_bone.rotation_quaternion)
+                if _quat_values_changed(cached_rotation, desired_rotation):
+                    pose_bone.rotation_quaternion = desired_rotation
+                    state.receiver_target_apply_bone_rotations[bone_name] = (
+                        float(desired_rotation[0]),
+                        float(desired_rotation[1]),
+                        float(desired_rotation[2]),
+                        float(desired_rotation[3]),
+                    )
+                    changed = True
+                else:
+                    state.receiver_target_apply_bone_rotations[bone_name] = cached_rotation
+
+    shape_blocks = sample.get("shape_blocks", {})
+    for key_name, value in sample.get("shapes", {}).items():
+        key_block = shape_blocks.get(key_name)
+        if key_block is None:
+            continue
+        cached_value = state.receiver_target_apply_shape_values.get(key_name)
+        numeric_value = float(value)
+        if cached_value is None:
+            cached_value = float(key_block.value)
+        if abs(float(cached_value) - numeric_value) > constants.SHAPE_EPS:
+            key_block.value = numeric_value
+            state.receiver_target_apply_shape_values[key_name] = numeric_value
+            changed = True
+        else:
+            state.receiver_target_apply_shape_values[key_name] = cached_value
+    return changed

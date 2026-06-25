@@ -15,6 +15,8 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         is_recording = runtime.is_recording()
+        is_baking = runtime.is_recording_bake_active()
+        bake_status = runtime.get_recording_bake_status()
         action_labels = runtime.get_recording_action_labels(scene)
         range_error = runtime.get_recording_range_error(scene)
         frame_start = runtime.get_recording_start_frame(scene)
@@ -28,6 +30,11 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         status_col.label(text="录制状态", icon="REC")
         if is_recording:
             status_col.label(text=f"录制中：已缓存 {runtime.get_recording_sample_count()} 帧", icon="REC")
+        elif is_baking:
+            status_col.label(text=f"保存中：{bake_status['label']}", icon="TIME")
+            if bake_status["detail"]:
+                status_col.label(text=bake_status["detail"], icon="INFO")
+            status_col.label(text=f"已缓存 {runtime.get_recording_sample_count()} 帧待写入", icon="INFO")
         else:
             status_col.label(text="当前未在录制", icon="INFO")
         status_col.label(text=f"输出范围：{frame_start} - {frame_end}")
@@ -62,13 +69,17 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         action_col = action_box.column(align=True)
         action_col.label(text="录制操作", icon="ACTION")
         button_row = action_col.row(align=True)
-        button_row.enabled = not bool(range_error)
-        rec_icon = "PAUSE" if is_recording else "REC"
-        rec_label = "停止录制" if is_recording else "开始录制"
+        button_row.enabled = (not bool(range_error)) and (not is_baking)
+        if is_baking:
+            rec_icon = "SORTTIME"
+            rec_label = "正在保存"
+        else:
+            rec_icon = "PAUSE" if is_recording else "REC"
+            rec_label = "停止录制" if is_recording else "开始录制"
         button_row.operator("vmc_link.toggle_recording", text=rec_label, icon=rec_icon)
 
         clear_row = action_col.row(align=True)
-        clear_row.enabled = (not is_recording) and (not bool(range_error))
+        clear_row.enabled = (not is_recording) and (not is_baking) and (not bool(range_error))
         clear_row.operator("vmc_link.clear_recording_range_keys", text="清空范围内关键帧", icon="TRASH")
         action_col.label(text="不会删除范围外关键帧", icon="INFO")
 

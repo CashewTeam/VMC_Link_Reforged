@@ -7,7 +7,7 @@
 bl_info = {
     "name": "VMC_Link_Reforged",
     "author": "Internet Addict",
-    "version": (0, 18, 0),
+    "version": (0, 30, 56),
     "blender": (4, 2, 0),
     "location": "3D 视图 > 侧边栏 > VMC Link",
     "description": "接收 VMC 与 RhyLive ARKit OSC，预览原始数据，并管理映射预设",

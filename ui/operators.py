@@ -1,6 +1,7 @@
 import bpy
 
 from ..mapping import arp as mapping_arp
+from ..mapping import mmd as mapping_mmd
 from ..mapping import mapper as mapping
 from ..mapping import preset_store as presets
 from ..preview import dummy_vrm
@@ -197,6 +198,7 @@ class VMC_LINK_OT_inspect_arp_rig(bpy.types.Operator):
         if not analysis["is_arp"]:
             self.report({"ERROR"}, "当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
             return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "ARP"
         self.report({"INFO"}, f"ARP 骨架检查通过：{analysis['target_name']}")
         return {"FINISHED"}
 
@@ -215,6 +217,7 @@ class VMC_LINK_OT_autofill_arp_bone_map(bpy.types.Operator):
 
         report_lines = mapping_arp.autofill_report_lines(result)
         mapping_arp.store_scene_report(scene, "ARP 自动填充", report_lines, result["analysis"]["is_arp"])
+        scene.vmc_link_target_rig_type = "ARP"
         self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 ARP 映射")
         return {"FINISHED"}
 
@@ -234,7 +237,67 @@ class VMC_LINK_OT_validate_arp_bone_map(bpy.types.Operator):
         if not validation["is_arp"]:
             self.report({"ERROR"}, "当前目标骨架不是可识别的 Auto Rig Pro 标准控制骨架")
             return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "ARP"
         self.report({"INFO"}, "已完成 ARP 映射校验")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_inspect_mmd_rig(bpy.types.Operator):
+    bl_idname = "vmc_link.inspect_mmd_rig"
+    bl_label = "检查 MMD 骨架"
+
+    def execute(self, context):
+        scene = context.scene
+        analysis = mapping_mmd.analyze_armature(getattr(scene, "vmc_link_armature", None))
+        report_lines = mapping_mmd.inspect_report_lines(analysis)
+        mapping_mmd.store_scene_report(scene, "MMD 骨架检查", report_lines, analysis["is_mmd"])
+        if not analysis["is_target_valid"]:
+            self.report({"ERROR"}, "请先绑定目标骨架")
+            return {"CANCELLED"}
+        if not analysis["is_mmd"]:
+            self.report({"ERROR"}, "当前目标骨架不是可识别的 MMD 标准骨架")
+            return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "MMD"
+        self.report({"INFO"}, "MMD 骨架检查通过")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_autofill_mmd_bone_map(bpy.types.Operator):
+    bl_idname = "vmc_link.autofill_mmd_bone_map"
+    bl_label = "应用标准 MMD 映射"
+
+    def execute(self, context):
+        scene = context.scene
+        try:
+            result = mapping_mmd.autofill_scene_mapping(scene)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        report_lines = mapping_mmd.autofill_report_lines(result)
+        mapping_mmd.store_scene_report(scene, "MMD 自动填充", report_lines, result["analysis"]["is_mmd"])
+        scene.vmc_link_target_rig_type = "MMD"
+        self.report({"INFO"}, f"已应用 {len(result['written'])} 项标准 MMD 映射")
+        return {"FINISHED"}
+
+
+class VMC_LINK_OT_validate_mmd_bone_map(bpy.types.Operator):
+    bl_idname = "vmc_link.validate_mmd_bone_map"
+    bl_label = "校验当前 MMD 映射"
+
+    def execute(self, context):
+        scene = context.scene
+        validation = mapping_mmd.validate_scene_mapping(scene)
+        report_lines = mapping_mmd.validation_report_lines(validation)
+        mapping_mmd.store_scene_report(scene, "MMD 映射校验", report_lines, validation["is_mmd"])
+        if not validation["is_target_valid"]:
+            self.report({"ERROR"}, "请先绑定目标骨架")
+            return {"CANCELLED"}
+        if not validation["is_mmd"]:
+            self.report({"ERROR"}, "当前目标骨架不是可识别的 MMD 标准骨架")
+            return {"CANCELLED"}
+        scene.vmc_link_target_rig_type = "MMD"
+        self.report({"INFO"}, "已完成 MMD 映射校验")
         return {"FINISHED"}
 
 
@@ -248,7 +311,7 @@ class VMC_LINK_OT_toggle_recording(bpy.types.Operator):
             if runtime.is_recording():
                 written_frames = runtime.get_recording_sample_count()
                 runtime._stop_recording_session(scene)
-                self.report({"INFO"}, f"停止录制：已写入 {written_frames} 帧")
+                self.report({"INFO"}, f"停止录制：已缓存 {written_frames} 帧，正在保存")
             else:
                 scene.frame_set(int(runtime.get_recording_start_frame(scene)))
                 if network.is_paused():
@@ -329,6 +392,9 @@ CLASSES = (
     VMC_LINK_OT_inspect_arp_rig,
     VMC_LINK_OT_autofill_arp_bone_map,
     VMC_LINK_OT_validate_arp_bone_map,
+    VMC_LINK_OT_inspect_mmd_rig,
+    VMC_LINK_OT_autofill_mmd_bone_map,
+    VMC_LINK_OT_validate_mmd_bone_map,
     VMC_LINK_OT_toggle_recording,
     VMC_LINK_OT_set_record_start_to_current_frame,
     VMC_LINK_OT_set_record_end_to_current_frame,

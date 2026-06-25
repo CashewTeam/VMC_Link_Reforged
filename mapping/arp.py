@@ -479,6 +479,11 @@ def restore_session_state(arm_obj, session_state):
 
 def prepare_receiver_session(scene):
     arm_obj = getattr(scene, "vmc_link_armature", None)
+    from . import target_rig as mapping_target_rig
+
+    if mapping_target_rig.scene_target_rig_type(scene) != mapping_target_rig.TARGET_RIG_ARP:
+        return analyze_armature(arm_obj)
+
     analysis = analyze_armature(arm_obj)
     if not analysis["is_arp"]:
         return analysis
