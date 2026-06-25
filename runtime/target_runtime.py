@@ -110,6 +110,52 @@ def _source_local_rotation_from_pose(raw_pose, source_start_basis=None, source_r
     return local_rotation
 
 
+def _source_pose_matrix_from_raw(source_bone, raw_bones, start_basis_rotations, cache):
+    bone_name = source_bone.name
+    cached = cache.get(bone_name)
+    if cached is not None:
+        return cached.copy()
+
+    source_rest = source_bone.bone.matrix_local.to_quaternion()
+    source_rest.normalize()
+    source_rest_inv = source_rest.inverted()
+    local_rotation = _source_local_rotation_from_pose(
+        raw_bones.get(bone_name),
+        start_basis_rotations.get(bone_name),
+        source_rest,
+        source_rest_inv,
+        source_bone,
+    )
+    basis_matrix = Matrix.LocRotScale(
+        source_bone.location.copy(),
+        local_rotation,
+        source_bone.scale.copy(),
+    )
+    bone_ref = source_bone.bone
+    matrix_local = bone_ref.matrix_local.copy()
+    parent_bone = source_bone.parent
+    if parent_bone is None:
+        pose_matrix = bone_ref.convert_local_to_pose(
+            basis_matrix,
+            matrix_local,
+        )
+    else:
+        parent_pose_matrix = _source_pose_matrix_from_raw(
+            parent_bone,
+            raw_bones,
+            start_basis_rotations,
+            cache,
+        )
+        pose_matrix = bone_ref.convert_local_to_pose(
+            basis_matrix,
+            matrix_local,
+            parent_matrix=parent_pose_matrix,
+            parent_matrix_local=parent_bone.bone.matrix_local,
+        )
+    cache[bone_name] = pose_matrix.copy()
+    return pose_matrix
+
+
 def _resolve_target_pose_matrix_from_sample(pose_bone, sample, cache):
     bone_name = pose_bone.name
     cached = cache.get(bone_name)
@@ -503,7 +549,9 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
         return
 
     filtered_rotations = context.setdefault("arp_filtered_rotations", {})
+    source_pose_matrices = {}
     target_pose_matrices = {}
+    preview_start_basis_rotations = context.get("preview_start_basis_rotations", {})
     for bone_name, pose_bone in context.get("arp_ik_fk_pose_bones", ()):
         sample["ik_fk_switches"][bone_name] = 1.0
         sample["ik_fk_pose_bones"][bone_name] = pose_bone
@@ -558,7 +606,13 @@ def _evaluate_arp_target_armature(arm_obj, bones, dirty_bone_names, context, sam
                 continue
             if source_bone is None or target_bone_ref is None or target_matrix_local is None:
                 continue
-            source_armature_q = source_bone.matrix.to_quaternion()
+            source_matrix = _source_pose_matrix_from_raw(
+                source_bone,
+                bones,
+                preview_start_basis_rotations,
+                source_pose_matrices,
+            )
+            source_armature_q = source_matrix.to_quaternion()
             source_armature_q.normalize()
             target_armature_q = calibration.inverted() @ source_armature_q
             target_armature_q.normalize()
