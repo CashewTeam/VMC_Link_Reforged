@@ -118,6 +118,13 @@ MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES = frozenset(
     )
 )
 
+MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
+    (
+        "RightLowerArm",
+        "RightHand",
+    )
+)
+
 _FINGER_TARGETS = {
     ("Thumb", 0): "親指０",
     ("Thumb", 1): "親指１",
@@ -435,6 +442,10 @@ def uses_neutral_axis_calibration(source_name: str) -> bool:
 
 def uses_right_arm_swing_correction(source_name: str) -> bool:
     return source_name in MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES
+
+
+def uses_right_arm_roll_correction(source_name: str) -> bool:
+    return source_name in MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES
 
 
 def clear_scene_report(scene):

@@ -200,6 +200,19 @@ def _remap_local_delta_with_rest_quaternions(source_rest, source_rest_inv, targe
     return target_delta
 
 
+def _signed_projected_angle(from_vec, to_vec, axis) -> float:
+    from_proj = from_vec - axis * from_vec.dot(axis)
+    to_proj = to_vec - axis * to_vec.dot(axis)
+    if from_proj.length_squared <= 1e-12 or to_proj.length_squared <= 1e-12:
+        return 0.0
+    from_proj.normalize()
+    to_proj.normalize()
+    angle = from_proj.angle(to_proj)
+    if axis.dot(from_proj.cross(to_proj)) < 0.0:
+        angle = -angle
+    return angle
+
+
 def _compute_eye_look_quaternion(look_h: float, look_v: float):
     look_h = max(-1.0, min(1.0, look_h))
     look_v = max(-1.0, min(1.0, look_v))
@@ -486,6 +499,13 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
                 source_axis = (source_matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))).normalized()
                 swing = desired_axis.rotation_difference(source_axis)
                 desired_armature_q = swing @ desired_armature_q
+            if mapping_mmd.uses_right_arm_roll_correction(source_name):
+                desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
+                desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
+                # MMD right-side forearm bones keep Y aligned but mirror X/Z relative to the VRM source.
+                source_x_axis = -(source_matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))).normalized()
+                roll_angle = _signed_projected_angle(desired_x_axis, source_x_axis, desired_axis)
+                desired_armature_q = Quaternion(desired_axis, roll_angle) @ desired_armature_q
             desired_armature_q.normalize()
             desired_matrix = Matrix.LocRotScale(
                 target_start_location,
