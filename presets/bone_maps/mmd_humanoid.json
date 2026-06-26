@@ -2,7 +2,7 @@
   "version": 1,
   "mapping_kind": "bone",
   "entries": {
-    "CenterMotion": "全ての親",
+    "CenterMotion": "グルーブ",
     "Hips": "センター",
     "Spine": "上半身",
     "Chest": "上半身2",

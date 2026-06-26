@@ -4,7 +4,7 @@
 
 当前阶段：`Beta`
 
-当前版本：`1.0.2`
+当前版本：`1.0.4`
 
 ## 插件能做什么
 
@@ -145,6 +145,7 @@ vmc_link/
 
 默认纳入：
 
+- `AGENTS.md`
 - `__init__.py`
 - `blender_manifest.toml`
 - `README.md`

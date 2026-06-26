@@ -217,8 +217,9 @@ def ensure_scene_props():
     )
     scene_type.vmc_link_mmd_mirror_roll_side = bpy.props.EnumProperty(
         name="MMD 镜像 Roll 校正侧",
-        description="选择哪一侧手臂使用 MMD 镜像 roll 校正；不同角色可能是左臂或右臂需要额外校正",
+        description="选择哪一侧手臂使用 MMD 镜像 roll 校正；也可以关闭这项校正",
         items=(
+            ("NONE", "无", "不对手臂额外应用镜像 roll 校正"),
             ("RIGHT", "右臂", "对右侧上臂、小臂和手腕应用镜像 roll 校正"),
             ("LEFT", "左臂", "对左侧上臂、小臂和手腕应用镜像 roll 校正"),
         ),

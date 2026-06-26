@@ -3,7 +3,7 @@ from . import mapper as mapping
 
 
 MMD_BUILTIN_PRESET_FILE = "mmd_humanoid.json"
-MMD_ROOT_MOTION_DEFAULT_TARGET = "全ての親"
+MMD_ROOT_MOTION_DEFAULT_TARGET = "グルーブ"
 
 MMD_DETECTION_REQUIRED_TARGETS = (
     "センター",
@@ -474,6 +474,8 @@ def mirrored_arm_roll_side(scene) -> str:
 
 
 def uses_mirrored_arm_roll_correction(scene, source_name: str) -> bool:
+    if mirrored_arm_roll_side(scene) == "NONE":
+        return False
     if mirrored_arm_roll_side(scene) == "LEFT":
         return source_name in MMD_LEFT_ARM_ROLL_CORRECTION_SOURCES
     return source_name in MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES
