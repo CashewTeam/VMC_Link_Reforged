@@ -71,6 +71,13 @@
   - 开启：预览层和目标层都实时更新。
   - 关闭：只更新预览层，目标层停止写入。
 
+### 目标预览 / 录制一致性
+
+- 目标角色实时预览和录制必须共用 `runtime/target_runtime.py` 的 `evaluate_target_sample()`。
+- 骨骼轴向、MMD / ARP 专用校正、表情映射等目标层矫正必须写在 `evaluate_target_sample()` 及其下游求值函数内。
+- `apply_target_sample()` 只负责把已求值样本写到 Blender 对象；录制烘焙只负责把同一份样本写入 Action。
+- 禁止在视口写入阶段或录制烘焙阶段再添加独立矫正分支；如果出现历史分支，以实时目标预览分支的结果为准并收敛回 `evaluate_target_sample()`。
+
 ### 根运动
 
 - `固定角色到中心` 开启时忽略 VMC 根位移。
