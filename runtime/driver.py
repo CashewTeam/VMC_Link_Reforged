@@ -1337,6 +1337,20 @@ def _clear_fcurve_frame_range(fcurve, frame_start: int, frame_end: int):
     return removed
 
 
+def _append_recording_key_points(fcurve, points, start_index: int, count: int):
+    if fcurve is None or count <= 0:
+        return 0
+
+    keyframe_points = fcurve.keyframe_points
+    old_count = len(keyframe_points)
+    keyframe_points.add(count)
+    for offset, (frame, value) in enumerate(points[start_index:start_index + count]):
+        keyframe = keyframe_points[old_count + offset]
+        keyframe.co = (float(frame), float(value))
+        keyframe.interpolation = "LINEAR"
+    return count
+
+
 def _bake_recording_track(track):
     points = track.get("points") or []
     if not points:
@@ -1355,10 +1369,7 @@ def _bake_recording_track(track):
     frame_start = min(frame for frame, _value in points)
     frame_end = max(frame for frame, _value in points)
     _clear_fcurve_frame_range(fcurve, frame_start, frame_end)
-    for frame, value in points:
-        keyframe = fcurve.keyframe_points.insert(float(frame), float(value), options={"FAST"})
-        if keyframe is not None:
-            keyframe.interpolation = "LINEAR"
+    _append_recording_key_points(fcurve, points, 0, len(points))
     fcurve.update()
     return len(points)
 
@@ -1715,14 +1726,11 @@ def _process_recording_bake_tracks_chunk(session):
         fcurve = session.get("current_fcurve")
         point_index = int(session.get("current_track_point_index", 0))
         limit = min(len(points), point_index + max(1, RECORDING_BAKE_MAX_KEYS_PER_TICK - inserted_keys))
-
-        while point_index < limit and time.perf_counter() < deadline:
-            frame, value = points[point_index]
-            keyframe = fcurve.keyframe_points.insert(float(frame), float(value), options={"FAST"})
-            if keyframe is not None:
-                keyframe.interpolation = "LINEAR"
-            point_index += 1
-            inserted_keys += 1
+        write_count = max(0, limit - point_index)
+        if write_count > 0:
+            inserted = _append_recording_key_points(fcurve, points, point_index, write_count)
+            point_index += inserted
+            inserted_keys += inserted
 
         session["current_track_point_index"] = point_index
         if point_index < len(points):
