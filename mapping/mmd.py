@@ -119,6 +119,7 @@ MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES = frozenset(
 
 MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
     (
+        "RightUpperArm",
         "RightLowerArm",
         "RightHand",
     )
