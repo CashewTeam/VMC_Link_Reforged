@@ -126,6 +126,15 @@ MMD_LEFT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
     )
 )
 
+MMD_STABLE_ROLL_SOURCES = frozenset(
+    (
+        "LeftFoot",
+        "LeftToeBase",
+        "RightFoot",
+        "RightToeBase",
+    )
+)
+
 _FINGER_TARGETS = {
     ("Thumb", 0): "親指０",
     ("Thumb", 1): "親指１",
@@ -479,6 +488,10 @@ def uses_mirrored_arm_roll_correction(scene, source_name: str) -> bool:
     if mirrored_arm_roll_side(scene) == "LEFT":
         return source_name in MMD_LEFT_ARM_ROLL_CORRECTION_SOURCES
     return source_name in MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES
+
+
+def uses_stable_roll_calibration(source_name: str) -> bool:
+    return source_name in MMD_STABLE_ROLL_SOURCES
 
 
 def clear_scene_report(scene):

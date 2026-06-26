@@ -473,6 +473,7 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
         source_start_basis_rotation,
         source_start_basis_rotation_inv,
         target_start_basis_rotation,
+        target_start_rotation,
         target_bone_ref,
         target_matrix_local,
         parent_bone,
@@ -493,18 +494,23 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
             )
             source_armature_q = source_matrix.to_quaternion()
             source_armature_q.normalize()
-            desired_armature_q = calibration @ source_armature_q
-            desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
             source_axis = (source_matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))).normalized()
-            swing = desired_axis.rotation_difference(source_axis)
-            desired_armature_q = swing @ desired_armature_q
-            if mapping_mmd.uses_mirrored_arm_roll_correction(scene, source_name):
+            if mapping_mmd.uses_stable_roll_calibration(source_name):
+                target_start_axis = (target_start_rotation @ Vector((0.0, 1.0, 0.0))).normalized()
+                swing = target_start_axis.rotation_difference(source_axis)
+                desired_armature_q = swing @ target_start_rotation
+            else:
+                desired_armature_q = calibration @ source_armature_q
                 desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
-                desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
-                # MMD mirrored-arm forearm bones keep Y aligned but mirror X/Z relative to the VRM source.
-                source_x_axis = -(source_matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))).normalized()
-                roll_angle = _signed_projected_angle(desired_x_axis, source_x_axis, desired_axis)
-                desired_armature_q = Quaternion(desired_axis, roll_angle) @ desired_armature_q
+                swing = desired_axis.rotation_difference(source_axis)
+                desired_armature_q = swing @ desired_armature_q
+                if mapping_mmd.uses_mirrored_arm_roll_correction(scene, source_name):
+                    desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
+                    desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
+                    # MMD mirrored-arm forearm bones keep Y aligned but mirror X/Z relative to the VRM source.
+                    source_x_axis = -(source_matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))).normalized()
+                    roll_angle = _signed_projected_angle(desired_x_axis, source_x_axis, desired_axis)
+                    desired_armature_q = Quaternion(desired_axis, roll_angle) @ desired_armature_q
             desired_armature_q.normalize()
             desired_matrix = Matrix.LocRotScale(
                 target_start_location,

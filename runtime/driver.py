@@ -758,6 +758,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
                             source_start_basis_rotation.copy(),
                             source_start_basis_rotation_inv.copy(),
                             target_start_basis_rotation.copy(),
+                            target_start_rotation.copy(),
                             target_bone_ref,
                             target_bone_ref.matrix_local.copy(),
                             parent_bone,
