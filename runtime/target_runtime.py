@@ -292,7 +292,8 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         start_location = context.get("mmd_root_motion_start_location")
         if root_motion_bone is None or start_location is None:
             return
-        local_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
+        object_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
+        local_delta = root_motion_bone.bone.matrix_local.to_3x3().inverted_safe() @ object_delta
         bone_sample = _ensure_bone_sample(sample, root_motion_bone)
         bone_sample["location"] = start_location + local_delta
         return

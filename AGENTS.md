@@ -48,6 +48,41 @@ There is no separate automated test suite yet. Every change should include:
 
 When touching preview or recording, ensure both still use the same correction chain.
 
+## Blender MCP Bone Sampling
+Use Blender MCP for pose debugging before changing mapping math. Keep reads non-destructive.
+
+- Resolve the loaded add-on package from `sys.modules`; in Blender extensions it is commonly `bl_ext.user_default.vmc_link`, not plain `vmc_link`.
+- For single-frame checks, read `scene.vmc_link_preview_armature`, `scene.vmc_link_armature`, and the relevant mapping module, then inspect `pose.bones`.
+- For live receiver sampling, do not call `time.sleep()` in Blender code because it blocks the main thread and can freeze incoming data. Register a `bpy.app.timers` callback and sample every `0.05-0.1s` for `1-2s`.
+- Store temporary samples in `bpy.app.driver_namespace`, for example `vmc_link_limb_sample_state`, then run a second MCP call to summarize them.
+- Compare preview and target bones by world axes, not only quaternion numbers: `obj.matrix_world @ pose_bone.matrix`, then inspect normalized `X/Y/Z` axes, head, tail, and local rotation.
+- For MMD/ARP issues, record the active target type, runtime strategy, root-motion target, user config, and actual runtime map before interpreting pose data.
+
+Minimal sampling pattern:
+
+```python
+import bpy, time
+state = {"start": time.perf_counter(), "samples": [], "done": False}
+bpy.app.driver_namespace["vmc_link_sample_state"] = state
+
+def tick():
+    scene = bpy.context.scene
+    preview = scene.vmc_link_preview_armature
+    target = scene.vmc_link_armature
+    bpy.context.view_layer.update()
+    state["samples"].append({
+        "t": time.perf_counter() - state["start"],
+        "preview": preview.name if preview else "",
+        "target": target.name if target else "",
+    })
+    if time.perf_counter() - state["start"] >= 2.0:
+        state["done"] = True
+        return None
+    return 0.1
+
+bpy.app.timers.register(tick, first_interval=0.0)
+```
+
 ## Commit & Pull Request Guidelines
 Recent history favors short, imperative commit subjects, often in Chinese, for example: `修正小臂旋转` or `Document target preview and recording consistency`.
 
