@@ -32,6 +32,8 @@ INTERMEDIATE_RIG_SCHEMA_VERSION = 2
 INTERMEDIATE_RIG_PROP_ROLE = "vmc_link_role"
 INTERMEDIATE_RIG_PROP_SCHEMA = "vmc_link_schema_version"
 
+CENTER_MOTION_SOURCE_KEY = "CenterMotion"
+BONE_MAPPING_EXTRA_KEYS = (CENTER_MOTION_SOURCE_KEY,)
 
 BONE_ALIASES = {
     "Hips": ["hips", "pelvis", "root"],

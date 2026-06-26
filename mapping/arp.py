@@ -3,6 +3,7 @@ from . import mapper as mapping
 
 
 ARP_BUILTIN_PRESET_FILE = "arp_fk_humanoid.json"
+ARP_ROOT_MOTION_DEFAULT_TARGET = "c_traj"
 
 ARP_DETECTION_REQUIRED_TARGETS = (
     "c_root_master.x",
@@ -267,6 +268,7 @@ def analyze_armature(arm_obj):
         "is_arp": False,
         "missing_detection_targets": [],
         "resolved_default_targets": {},
+        "resolved_root_motion_target": "",
         "missing_default_sources": [],
         "conflicts": [],
         "ambiguities": [],
@@ -293,6 +295,11 @@ def analyze_armature(arm_obj):
         resolved_default_targets[source_key] = actual_name
 
     result["resolved_default_targets"] = resolved_default_targets
+    resolved_root_motion_target = _resolve_pose_bone_name(arm_obj, ARP_ROOT_MOTION_DEFAULT_TARGET)
+    if resolved_root_motion_target is None:
+        missing_default_sources.append(constants.CENTER_MOTION_SOURCE_KEY)
+    else:
+        result["resolved_root_motion_target"] = resolved_root_motion_target
     result["missing_default_sources"] = missing_default_sources
     result["conflicts"] = _detect_conflicts(resolved_default_targets)
 
@@ -360,6 +367,7 @@ def validate_scene_mapping(scene):
         "必需骨": ARP_REQUIRED_SOURCE_BONES,
         "可选骨": ARP_OPTIONAL_SOURCE_BONES,
         "眼睛": ARP_EYE_SOURCE_BONES,
+        "根位移": (constants.CENTER_MOTION_SOURCE_KEY,),
         "手指": constants.INTERMEDIATE_OPTIONAL_BONES,
     }
 
@@ -376,9 +384,14 @@ def validate_scene_mapping(scene):
     target_sources = {}
     for source_key, target_name in entries.items():
         target_sources.setdefault(target_name, []).append(source_key)
-        expected = analysis["resolved_default_targets"].get(source_key)
+        if source_key == constants.CENTER_MOTION_SOURCE_KEY:
+            expected = analysis.get("resolved_root_motion_target") or None
+        else:
+            expected = analysis["resolved_default_targets"].get(source_key)
         if expected is not None and target_name != expected:
             validation["mismatched_defaults"].append(f"{source_key} -> {target_name}，应为 {expected}")
+        elif source_key == constants.CENTER_MOTION_SOURCE_KEY:
+            continue
         elif expected is None and target_name not in ARP_ALLOWED_CONTROL_TARGETS:
             validation["mismatched_defaults"].append(f"{source_key} -> {target_name}")
     validation["duplicate_targets"] = [
@@ -405,6 +418,10 @@ def apply_standard_scene_mapping(scene):
             continue
         mapping.set_mapping_override(scene, constants.MAPPING_KIND_BONE, source_key, target_name)
         written.append(f"{source_key} -> {target_name}")
+    root_motion_target = analysis.get("resolved_root_motion_target")
+    if root_motion_target:
+        mapping.set_mapping_override(scene, constants.MAPPING_KIND_BONE, constants.CENTER_MOTION_SOURCE_KEY, root_motion_target)
+        written.append(f"{constants.CENTER_MOTION_SOURCE_KEY} -> {root_motion_target}")
 
     if hasattr(scene, "vmc_link_bone_map_preset"):
         scene.vmc_link_bone_map_preset = ARP_BUILTIN_PRESET_FILE
@@ -508,16 +525,33 @@ def reset_runtime_control_transforms(scene):
         pose_bone.scale = (1.0, 1.0, 1.0)
         reset_count += 1
 
-    traj_bone = pose.get("c_traj")
-    if traj_bone is not None:
-        traj_location = tuple(traj_bone.location)
-        traj_bone.rotation_mode = "QUATERNION"
-        traj_bone.location = traj_location
-        traj_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
-        traj_bone.scale = (1.0, 1.0, 1.0)
+    root_motion_target = resolve_root_motion_target_name(scene, arm_obj)
+    root_motion_bone = pose.get(root_motion_target) if root_motion_target else None
+    if root_motion_bone is not None:
+        root_location = tuple(root_motion_bone.location)
+        root_motion_bone.rotation_mode = "QUATERNION"
+        root_motion_bone.location = root_location
+        root_motion_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        root_motion_bone.scale = (1.0, 1.0, 1.0)
         reset_count += 1
 
     return reset_count
+
+
+def resolve_root_motion_target_name(scene, arm_obj=None) -> str:
+    if arm_obj is None and scene is not None:
+        arm_obj = getattr(scene, "vmc_link_armature", None)
+    if not _has_pose_bones(arm_obj):
+        return ""
+
+    configured_target = mapping.get_mapping_override(scene, constants.MAPPING_KIND_BONE, constants.CENTER_MOTION_SOURCE_KEY) if scene is not None else ""
+    for wanted_target in (configured_target, ARP_ROOT_MOTION_DEFAULT_TARGET):
+        if not wanted_target:
+            continue
+        actual_name = _resolve_pose_bone_name(arm_obj, wanted_target)
+        if actual_name is not None:
+            return actual_name
+    return ""
 
 
 def prepare_receiver_session(scene):
@@ -579,6 +613,8 @@ def inspect_report_lines(analysis: dict):
         f"冲突项: {len(analysis['conflicts'])}",
         f"歧义项: {len(analysis['ambiguities'])}",
     ]
+    if analysis.get("resolved_root_motion_target"):
+        lines.append(f"根位移目标: {analysis['resolved_root_motion_target']}")
 
     if analysis["missing_detection_targets"]:
         lines.append("缺失识别骨: " + ", ".join(analysis["missing_detection_targets"][:8]))
@@ -604,7 +640,7 @@ def validation_report_lines(validation: dict):
         f"ARP 识别: {'通过' if validation['is_arp'] else '失败'}",
     ]
 
-    for label in ("必需骨", "可选骨", "眼睛", "手指"):
+    for label in ("必需骨", "可选骨", "眼睛", "根位移", "手指"):
         group = validation["groups"].get(label)
         if group is None:
             continue

@@ -39,7 +39,7 @@ def draw_bone_mapping_entries(layout, scene):
         layout.label(text="请选择目标骨架后再使用骨骼选择器", icon="INFO")
 
     col = layout.column(align=True)
-    for vmc_name in constants.BONE_ALIASES:
+    for vmc_name in mapping.mapping_keys(constants.MAPPING_KIND_BONE):
         prop_name = mapping.bone_override_prop_name(vmc_name)
         if can_search_bones:
             col.prop_search(scene, prop_name, arm_for_search.pose, "bones", text=vmc_name, icon="BONE_DATA")
@@ -110,7 +110,7 @@ def draw_mmd_helper(layout, scene):
     col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_MMD).builtin_preset_file}", icon="INFO")
     col.label(text=f"默认名表: {len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
     col.label(text="支持标准 MMD 骨名与 .L/.R 侧别名解析", icon="INFO")
-    col.label(text="根位移写入 センター 骨，骨骼旋转按起始 pose delta + rest 轴重映射求值", icon="INFO")
+    col.label(text="根位移写入骨骼由 CenterMotion 映射项决定，MMD 默认使用 全ての親", icon="INFO")
 
     row = col.row(align=True)
     row.operator("vmc_link.inspect_mmd_rig", text="检查 MMD 骨架", icon="VIEWZOOM")

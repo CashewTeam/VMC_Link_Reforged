@@ -4,7 +4,7 @@
 
 当前阶段：`Alpha`
 
-当前版本：`0.34.11`
+当前版本：`0.35.0`
 
 项目名：`VMC_Link_Reforged`
 
@@ -86,7 +86,9 @@
   2. `Tra/Pos`
   3. `Bone/Pos:Hips`
 - 普通目标骨架：位移叠加到目标骨架对象起始位置。
-- ARP 目标骨架：位移叠加到 `c_traj.location`，不移动 `rig` 对象，不写入 `c_pos`。
+- ARP / MMD 目标骨架：位移写入骨骼映射表里的 `CenterMotion` 目标骨。
+- ARP 内建默认：`CenterMotion -> c_traj`，不移动 `rig` 对象，不写入 `c_pos`。
+- MMD 内建默认：`CenterMotion -> 全ての親`。
 
 ## 映射与预设
 

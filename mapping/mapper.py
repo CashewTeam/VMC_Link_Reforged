@@ -99,7 +99,7 @@ def arkit_override_prop_name(arkit_key: str) -> str:
 
 
 def ensure_dynamic_scene_props(scene_type):
-    for vmc_name in constants.BONE_ALIASES:
+    for vmc_name in mapping_keys(constants.MAPPING_KIND_BONE):
         prop_name = bone_override_prop_name(vmc_name)
         if hasattr(scene_type, prop_name):
             continue
@@ -146,7 +146,7 @@ def ensure_dynamic_scene_props(scene_type):
 
 
 def unregister_dynamic_scene_props(scene_type):
-    for vmc_name in constants.BONE_ALIASES:
+    for vmc_name in mapping_keys(constants.MAPPING_KIND_BONE):
         prop_name = bone_override_prop_name(vmc_name)
         if hasattr(scene_type, prop_name):
             delattr(scene_type, prop_name)
@@ -164,7 +164,7 @@ def unregister_dynamic_scene_props(scene_type):
 
 def mapping_keys(kind: str):
     if kind == constants.MAPPING_KIND_BONE:
-        return list(constants.BONE_ALIASES.keys())
+        return [*constants.BONE_ALIASES.keys(), *constants.BONE_MAPPING_EXTRA_KEYS]
     if kind == constants.MAPPING_KIND_VMC_BLEND:
         return list(constants.BLEND_ALIASES.keys())
     if kind == constants.MAPPING_KIND_ARKIT_BLEND:

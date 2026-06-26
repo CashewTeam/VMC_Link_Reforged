@@ -242,17 +242,17 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         context["root_source"] = None
         context["root_baseline_location"] = None
         context["root_baseline_rotation"] = None
-        traj_bone = context.get("arp_traj_bone")
-        start_location = context.get("arp_traj_start_location")
-        if traj_bone is not None and start_location is not None:
-            bone_sample = _ensure_bone_sample(sample, traj_bone)
+        root_motion_bone = context.get("arp_root_motion_bone")
+        start_location = context.get("arp_root_motion_start_location")
+        if root_motion_bone is not None and start_location is not None:
+            bone_sample = _ensure_bone_sample(sample, root_motion_bone)
             bone_sample["location"] = start_location.copy()
         return
     if lock_to_center and context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
-        center_bone = context.get("mmd_center_bone")
-        start_location = context.get("mmd_center_start_location")
-        if center_bone is not None and start_location is not None:
-            bone_sample = _ensure_bone_sample(sample, center_bone)
+        root_motion_bone = context.get("mmd_root_motion_bone")
+        start_location = context.get("mmd_root_motion_start_location")
+        if root_motion_bone is not None and start_location is not None:
+            bone_sample = _ensure_bone_sample(sample, root_motion_bone)
             bone_sample["location"] = start_location.copy()
         return
 
@@ -278,22 +278,22 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         delta_location = Vector((0.0, 0.0, 0.0))
 
     if context.get("is_arp"):
-        traj_bone = context.get("arp_traj_bone")
-        start_location = context.get("arp_traj_start_location")
-        if traj_bone is None or start_location is None:
+        root_motion_bone = context.get("arp_root_motion_bone")
+        start_location = context.get("arp_root_motion_start_location")
+        if root_motion_bone is None or start_location is None:
             return
         local_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
         local_delta = Vector((-local_delta.x, -local_delta.y, local_delta.z))
-        bone_sample = _ensure_bone_sample(sample, traj_bone)
+        bone_sample = _ensure_bone_sample(sample, root_motion_bone)
         bone_sample["location"] = start_location + local_delta
         return
     if context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
-        center_bone = context.get("mmd_center_bone")
-        start_location = context.get("mmd_center_start_location")
-        if center_bone is None or start_location is None:
+        root_motion_bone = context.get("mmd_root_motion_bone")
+        start_location = context.get("mmd_root_motion_start_location")
+        if root_motion_bone is None or start_location is None:
             return
         local_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
-        bone_sample = _ensure_bone_sample(sample, center_bone)
+        bone_sample = _ensure_bone_sample(sample, root_motion_bone)
         bone_sample["location"] = start_location + local_delta
         return
 

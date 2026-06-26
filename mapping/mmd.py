@@ -1,8 +1,9 @@
-from ..core import helpers
+from ..core import constants, helpers
 from . import mapper as mapping
 
 
 MMD_BUILTIN_PRESET_FILE = "mmd_humanoid.json"
+MMD_ROOT_MOTION_DEFAULT_TARGET = "全ての親"
 
 MMD_DETECTION_REQUIRED_TARGETS = (
     "センター",
@@ -250,6 +251,7 @@ def analyze_armature(arm_obj):
         "optional_found": {},
         "optional_missing": {},
         "resolved_default_targets": {},
+        "resolved_root_motion_target": "",
         "default_unresolved": [],
         "default_aliases": [],
     }
@@ -279,6 +281,9 @@ def analyze_armature(arm_obj):
 
     resolved_default_targets, default_unresolved, default_aliases = _resolved_default_targets(arm_obj)
     result["resolved_default_targets"] = resolved_default_targets
+    resolved_root_motion_target = _resolve_pose_bone_name(arm_obj, MMD_ROOT_MOTION_DEFAULT_TARGET)
+    if resolved_root_motion_target is not None:
+        result["resolved_root_motion_target"] = resolved_root_motion_target
     result["default_unresolved"] = default_unresolved
     result["default_aliases"] = default_aliases
     result["is_mmd"] = not result["required_missing"]
@@ -352,6 +357,7 @@ def validate_scene_mapping(scene):
         ),
         "可选骨": ("UpperChest", "LeftToeBase", "RightToeBase"),
         "眼睛": ("LeftEye", "RightEye"),
+        "根位移": (constants.CENTER_MOTION_SOURCE_KEY,),
         "手指": tuple(
             key
             for key in MMD_DEFAULT_BONE_TARGETS
@@ -372,7 +378,10 @@ def validate_scene_mapping(scene):
         actual_name = _resolve_pose_bone_name(arm_obj, target_name)
         target_key = actual_name or target_name
         target_sources.setdefault(target_key, []).append(source_key)
-        expected = resolved_defaults.get(source_key, MMD_DEFAULT_BONE_TARGETS.get(source_key))
+        if source_key == constants.CENTER_MOTION_SOURCE_KEY:
+            expected = analysis.get("resolved_root_motion_target") or None
+        else:
+            expected = resolved_defaults.get(source_key, MMD_DEFAULT_BONE_TARGETS.get(source_key))
         if expected is not None and target_key != expected:
             validation["mismatched_defaults"].append(f"{source_key} -> {target_name}，应为 {expected}")
             validation["stale_overrides"].append(f"{source_key}: 当前 {target_name}，应为 {expected}")
@@ -406,6 +415,10 @@ def apply_standard_scene_mapping(scene):
             continue
         mapping.set_mapping_override(scene, "bone", source_key, actual_name)
         written.append(f"{source_key} -> {actual_name}")
+    root_motion_target = analysis.get("resolved_root_motion_target")
+    if root_motion_target:
+        mapping.set_mapping_override(scene, "bone", constants.CENTER_MOTION_SOURCE_KEY, root_motion_target)
+        written.append(f"{constants.CENTER_MOTION_SOURCE_KEY} -> {root_motion_target}")
 
     mapping.invalidate_bone_map_cache()
     return {
@@ -434,6 +447,22 @@ def build_runtime_mapping(scene, arm_obj=None):
             continue
         runtime_map[source_key] = actual_name
     return runtime_map
+
+
+def resolve_root_motion_target_name(scene, arm_obj=None) -> str:
+    if arm_obj is None and scene is not None:
+        arm_obj = getattr(scene, "vmc_link_armature", None)
+    if not _has_pose_bones(arm_obj):
+        return ""
+
+    configured_target = mapping.get_mapping_override(scene, "bone", constants.CENTER_MOTION_SOURCE_KEY) if scene is not None else ""
+    for wanted_target in (configured_target, MMD_ROOT_MOTION_DEFAULT_TARGET):
+        if not wanted_target:
+            continue
+        actual_name = _resolve_pose_bone_name(arm_obj, wanted_target)
+        if actual_name is not None:
+            return actual_name
+    return ""
 
 
 def uses_neutral_axis_calibration(source_name: str) -> bool:
@@ -472,6 +501,8 @@ def inspect_report_lines(analysis: dict):
         f"识别必需控制骨: {len(MMD_DETECTION_REQUIRED_TARGETS) - len(analysis['required_missing'])}/{len(MMD_DETECTION_REQUIRED_TARGETS)}",
         f"默认可映射项: {len(analysis['resolved_default_targets'])}/{len(MMD_DEFAULT_BONE_TARGETS)}",
     ]
+    if analysis.get("resolved_root_motion_target"):
+        lines.append(f"根位移目标: {analysis['resolved_root_motion_target']}")
     if analysis["required_missing"]:
         lines.append("缺失识别骨: " + ", ".join(analysis["required_missing"][:8]))
     if analysis["required_aliases"]:
@@ -490,7 +521,7 @@ def validation_report_lines(validation: dict):
     if not validation["is_target_valid"]:
         return ["未绑定有效目标骨架"]
     lines = [f"MMD 识别: {'通过' if validation['is_mmd'] else '失败'}"]
-    for label in ("必需骨", "可选骨", "眼睛", "手指"):
+    for label in ("必需骨", "可选骨", "眼睛", "根位移", "手指"):
         group = validation["groups"].get(label)
         if group is None:
             continue

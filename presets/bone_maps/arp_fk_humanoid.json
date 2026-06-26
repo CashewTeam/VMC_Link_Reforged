@@ -2,6 +2,7 @@
   "version": 1,
   "mapping_kind": "bone",
   "entries": {
+    "CenterMotion": "c_traj",
     "Hips": "c_root_master.x",
     "Spine": "c_spine_01.x",
     "Chest": "c_spine_02.x",

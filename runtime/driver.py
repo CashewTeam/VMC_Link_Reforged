@@ -616,10 +616,10 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
         "root_baseline_location": None,
         "root_baseline_rotation": None,
         "is_arp": False,
-        "arp_traj_bone": None,
-        "arp_traj_start_location": None,
-        "mmd_center_bone": None,
-        "mmd_center_start_location": None,
+        "arp_root_motion_bone": None,
+        "arp_root_motion_start_location": None,
+        "mmd_root_motion_bone": None,
+        "mmd_root_motion_start_location": None,
         "generic_runtime_entries": (),
         "generic_runtime_entries_by_source": {},
         "eye_left_name": None,
@@ -694,10 +694,11 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
                 for source_name, pose_bone, source_rest, source_rest_inv, target_rest, target_rest_inv in context["generic_runtime_entries"]
             }
         if context["target_runtime_strategy"] == mapping_target_rig.RUNTIME_STRATEGY_MMD and mapping.has_pose_bones(arm_obj):
-            center_bone = arm_obj.pose.bones.get("センター")
-            if center_bone is not None:
-                context["mmd_center_bone"] = center_bone
-                context["mmd_center_start_location"] = center_bone.location.copy()
+            root_motion_target = mapping_mmd.resolve_root_motion_target_name(scene, arm_obj)
+            root_motion_bone = arm_obj.pose.bones.get(root_motion_target) if root_motion_target else None
+            if root_motion_bone is not None:
+                context["mmd_root_motion_bone"] = root_motion_bone
+                context["mmd_root_motion_start_location"] = root_motion_bone.location.copy()
             if mapping.has_pose_bones(preview_arm):
                 runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
                 entries = []
@@ -777,10 +778,11 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
     context["target_runtime_strategy"] = mapping_target_rig.RUNTIME_STRATEGY_ARP
     context["is_arp"] = True
     if mapping.has_pose_bones(arm_obj):
-        traj_bone = arm_obj.pose.bones.get("c_traj")
-        if traj_bone is not None:
-            context["arp_traj_bone"] = traj_bone
-            context["arp_traj_start_location"] = traj_bone.location.copy()
+        root_motion_target = mapping_arp.resolve_root_motion_target_name(scene, arm_obj)
+        root_motion_bone = arm_obj.pose.bones.get(root_motion_target) if root_motion_target else None
+        if root_motion_bone is not None:
+            context["arp_root_motion_bone"] = root_motion_bone
+            context["arp_root_motion_start_location"] = root_motion_bone.location.copy()
 
     if not mapping.has_pose_bones(preview_arm):
         return context
@@ -1970,8 +1972,18 @@ def _recordable_target_bones(scene, arm, context):
         for _source_name, target_name, _source_bone, target_bone, _calibration, *_rest in context.get("arp_runtime_entries", ()):
             if target_bone is not None and target_name in pose:
                 bone_names.add(target_name)
-        if context.get("arp_traj_bone") is not None and "c_traj" in pose:
-            bone_names.add("c_traj")
+        root_motion_bone = context.get("arp_root_motion_bone")
+        if root_motion_bone is not None and root_motion_bone.name in pose:
+            bone_names.add(root_motion_bone.name)
+        return bone_names
+
+    if context and context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        for _source_name, target_name, _source_bone, target_bone, *_rest in context.get("mmd_runtime_entries", ()):
+            if target_bone is not None and target_name in pose:
+                bone_names.add(target_name)
+        root_motion_bone = context.get("mmd_root_motion_bone")
+        if root_motion_bone is not None and root_motion_bone.name in pose:
+            bone_names.add(root_motion_bone.name)
         return bone_names
 
     for vmc_name in constants.BONE_ALIASES:

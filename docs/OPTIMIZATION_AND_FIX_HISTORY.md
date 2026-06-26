@@ -65,7 +65,7 @@
 - 手指局部 basis delta 驱动已接入。
 - 拇指 rest 轴转换已修复内弯变外翻问题。
 - 脚和脚趾使用相对起始姿态的 delta 旋转，避免直接套源脚部旋转。
-- ARP 根运动只写 `c_traj.location`，保持 `rig` 对象和 `c_pos` 默认不动。
+- ARP 根运动默认写 `CenterMotion -> c_traj.location`，保持 `rig` 对象和 `c_pos` 默认不动。
 - 近期重点仍是肩膀、上臂和局部轴向在真实角色上的生产调优。
 
 ## MMD 当前状态
