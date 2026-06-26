@@ -1480,6 +1480,7 @@ def _start_recording_bake_session(scene):
 
     if state.recording_source_start_ts <= 0.0 and raw_frames:
         state.recording_source_start_ts = float(raw_frames[0].get("timestamp", time.time()))
+    raw_frames = _coalesce_recording_raw_frames(scene, raw_frames, frame_start, frame_end)
 
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     arm = state.recording_armature_ref
@@ -1543,7 +1544,7 @@ def _switch_recording_bake_to_rebuild_phase(session):
     raw_total = int(session.get("raw_total", 0))
     session["phase"] = "rebuild"
     session["status_label"] = "正在重建录制采样"
-    session["status_detail"] = f"已处理原始帧 0 / {raw_total}"
+    session["status_detail"] = f"已处理采样帧 0 / {raw_total}"
     session["progress_value"] = RECORDING_BAKE_PREPARE_PROGRESS_SHARE
     _recording_bake_progress_update(RECORDING_BAKE_PREPARE_PROGRESS_SHARE, session)
 
@@ -1552,7 +1553,7 @@ def _switch_recording_bake_to_track_phase(session):
     track_items = tuple(state.recording_tracks.values())
     session["phase"] = "bake"
     session["status_label"] = "正在写入动作曲线"
-    session["status_detail"] = f"已完成轨道 0 / {len(track_items)}"
+    session["status_detail"] = f"已完成曲线通道 0 / {len(track_items)}"
     session["track_items"] = track_items
     session["track_index"] = 0
     session["track_total"] = len(track_items)
@@ -1641,7 +1642,7 @@ def _update_recording_bake_progress(session):
         raw_index = int(session.get("raw_index", 0))
         rebuild_span = RECORDING_BAKE_REBUILD_PROGRESS_SHARE - RECORDING_BAKE_PREPARE_PROGRESS_SHARE
         progress = RECORDING_BAKE_PREPARE_PROGRESS_SHARE + int((raw_index / raw_total) * rebuild_span)
-        session["status_detail"] = f"已处理原始帧 {raw_index} / {raw_total}"
+        session["status_detail"] = f"已处理采样帧 {raw_index} / {raw_total}"
     else:
         track_total = max(1, int(session.get("track_total", 0)))
         track_index = int(session.get("track_index", 0))
@@ -1656,10 +1657,10 @@ def _update_recording_bake_progress(session):
             point_fraction = min(1.0, float(session.get("current_track_point_index", 0)) / float(len(current_points)))
         if clear_index >= 0:
             track_fraction = 0.5 * clear_fraction
-            session["status_detail"] = f"正在清理轨道 {min(track_total, track_index + 1)} / {track_total} 的旧关键帧"
+            session["status_detail"] = f"正在清理曲线通道 {min(track_total, track_index + 1)} / {track_total} 的旧关键帧"
         else:
             track_fraction = 0.5 + 0.5 * point_fraction
-            session["status_detail"] = f"正在写入轨道 {min(track_total, track_index + 1)} / {track_total} 的新关键帧"
+            session["status_detail"] = f"正在写入曲线通道 {min(track_total, track_index + 1)} / {track_total} 的新关键帧"
         progress_fraction = min(1.0, (track_index + track_fraction) / float(track_total))
         progress = RECORDING_BAKE_REBUILD_PROGRESS_SHARE + int(
             progress_fraction * (RECORDING_BAKE_PROGRESS_TOTAL - RECORDING_BAKE_REBUILD_PROGRESS_SHARE)
@@ -2167,6 +2168,27 @@ def _current_recording_frame(scene, source_timestamp=None):
     return frame
 
 
+def _recording_frame_for_timestamp(scene, source_timestamp, frame_start: int) -> int:
+    fps_base = float(getattr(scene.render, "fps_base", 1.0) or 1.0)
+    fps = float(getattr(scene.render, "fps", 24)) / fps_base
+    elapsed = _recording_source_elapsed_seconds(float(source_timestamp))
+    return int(frame_start + round(elapsed * fps))
+
+
+def _coalesce_recording_raw_frames(scene, raw_frames, frame_start: int, frame_end: int):
+    if not raw_frames:
+        return []
+
+    by_frame = {}
+    for raw_frame in raw_frames:
+        frame = _recording_frame_for_timestamp(scene, raw_frame.get("timestamp", time.time()), frame_start)
+        effective_frame = min(frame, frame_end)
+        by_frame[effective_frame] = raw_frame
+        if frame >= frame_end:
+            break
+    return [by_frame[frame] for frame in sorted(by_frame)]
+
+
 def _build_recording_sample(arm, record_bones, face, record_shapes, target_context=None):
     sample = {
         "arm": None,
@@ -2546,6 +2568,7 @@ def _rebuild_recording_tracks_from_raw_frames(scene):
     state.recording_tracks = {}
     frame_start = int(state.recording_start_frame if state.recording_start_frame is not None else getattr(scene, "frame_current", 1))
     frame_end = int(state.recording_end_frame if state.recording_end_frame is not None else frame_start)
+    raw_frames = _coalesce_recording_raw_frames(scene, raw_frames, frame_start, frame_end)
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
     arm = state.recording_armature_ref
     session = {
