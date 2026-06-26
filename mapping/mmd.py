@@ -110,14 +110,6 @@ MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES = frozenset(
     )
 )
 
-MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES = frozenset(
-    (
-        "RightUpperArm",
-        "RightLowerArm",
-        "RightHand",
-    )
-)
-
 MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
     (
         "RightUpperArm",
@@ -475,10 +467,6 @@ def resolve_root_motion_target_name(scene, arm_obj=None) -> str:
 
 def uses_neutral_axis_calibration(source_name: str) -> bool:
     return source_name in MMD_NEUTRAL_AXIS_CALIBRATION_SOURCES
-
-
-def uses_right_arm_swing_correction(source_name: str) -> bool:
-    return source_name in MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES
 
 
 def mirrored_arm_roll_side(scene) -> str:

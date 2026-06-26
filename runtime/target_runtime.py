@@ -494,11 +494,10 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
             source_armature_q = source_matrix.to_quaternion()
             source_armature_q.normalize()
             desired_armature_q = calibration @ source_armature_q
-            if mapping_mmd.uses_right_arm_swing_correction(source_name):
-                desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
-                source_axis = (source_matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))).normalized()
-                swing = desired_axis.rotation_difference(source_axis)
-                desired_armature_q = swing @ desired_armature_q
+            desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
+            source_axis = (source_matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))).normalized()
+            swing = desired_axis.rotation_difference(source_axis)
+            desired_armature_q = swing @ desired_armature_q
             if mapping_mmd.uses_mirrored_arm_roll_correction(scene, source_name):
                 desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
                 desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
