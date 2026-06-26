@@ -2448,6 +2448,7 @@ def _process_recording_raw_frame(scene, session, raw_frame):
     lock_to_center = bool(session.get("lock_to_center", True))
     current_frame = _current_recording_frame(scene, raw_frame.get("timestamp"))
     effective_frame = min(current_frame, frame_end)
+    dirty_bone_names = () if raw_frame.get("body_dirty") else raw_frame.get("dirty_bone_names", ())
 
     evaluated_sample = target_runtime.evaluate_target_sample(
         scene,
@@ -2457,7 +2458,7 @@ def _process_recording_raw_frame(scene, session, raw_frame):
         raw_frame.get("root"),
         raw_frame.get("waist"),
         raw_frame.get("bones", {}),
-        raw_frame.get("dirty_bone_names", ()),
+        dirty_bone_names,
         raw_frame.get("vmc_blends", {}),
         raw_frame.get("canonical_vmc_blends", {}),
         raw_frame.get("arkit_blends", {}),
