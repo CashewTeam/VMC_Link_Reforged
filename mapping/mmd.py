@@ -126,6 +126,14 @@ MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
     )
 )
 
+MMD_LEFT_ARM_ROLL_CORRECTION_SOURCES = frozenset(
+    (
+        "LeftUpperArm",
+        "LeftLowerArm",
+        "LeftHand",
+    )
+)
+
 _FINGER_TARGETS = {
     ("Thumb", 0): "親指０",
     ("Thumb", 1): "親指１",
@@ -473,7 +481,13 @@ def uses_right_arm_swing_correction(source_name: str) -> bool:
     return source_name in MMD_RIGHT_ARM_SWING_CORRECTION_SOURCES
 
 
-def uses_right_arm_roll_correction(source_name: str) -> bool:
+def mirrored_arm_roll_side(scene) -> str:
+    return str(getattr(scene, "vmc_link_mmd_mirror_roll_side", "RIGHT")).upper()
+
+
+def uses_mirrored_arm_roll_correction(scene, source_name: str) -> bool:
+    if mirrored_arm_roll_side(scene) == "LEFT":
+        return source_name in MMD_LEFT_ARM_ROLL_CORRECTION_SOURCES
     return source_name in MMD_RIGHT_ARM_ROLL_CORRECTION_SOURCES
 
 

@@ -123,6 +123,7 @@ FIXED_SCENE_PROPS = (
     "vmc_link_live_preview",
     "vmc_link_lock_to_center",
     "vmc_link_target_rig_type",
+    "vmc_link_mmd_mirror_roll_side",
     "vmc_link_face_source",
     "vmc_link_arkit_port",
     "vmc_link_armature",
@@ -213,6 +214,16 @@ def ensure_scene_props():
         ),
         default="GENERIC",
         update=_on_target_rig_type_changed,
+    )
+    scene_type.vmc_link_mmd_mirror_roll_side = bpy.props.EnumProperty(
+        name="MMD 镜像 Roll 校正侧",
+        description="选择哪一侧手臂使用 MMD 镜像 roll 校正；不同角色可能是左臂或右臂需要额外校正",
+        items=(
+            ("RIGHT", "右臂", "对右侧上臂、小臂和手腕应用镜像 roll 校正"),
+            ("LEFT", "左臂", "对左侧上臂、小臂和手腕应用镜像 roll 校正"),
+        ),
+        default="RIGHT",
+        update=_on_live_preview_changed,
     )
     scene_type.vmc_link_face_source = bpy.props.EnumProperty(
         name="面部来源",

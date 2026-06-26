@@ -111,6 +111,7 @@ def draw_mmd_helper(layout, scene):
     col.label(text=f"默认名表: {len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
     col.label(text="支持标准 MMD 骨名与 .L/.R 侧别名解析", icon="INFO")
     col.label(text="根位移写入骨骼由 CenterMotion 映射项决定，MMD 默认使用 全ての親", icon="INFO")
+    col.prop(scene, "vmc_link_mmd_mirror_roll_side", text="镜像 Roll 校正侧")
 
     row = col.row(align=True)
     row.operator("vmc_link.inspect_mmd_rig", text="检查 MMD 骨架", icon="VIEWZOOM")
