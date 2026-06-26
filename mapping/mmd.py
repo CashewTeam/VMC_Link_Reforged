@@ -65,10 +65,9 @@ MMD_OPTIONAL_TARGET_GROUPS = {
 }
 
 MMD_DEFAULT_BONE_TARGETS = {
-    "Hips": "下半身",
+    "Hips": "センター",
     "Spine": "上半身",
     "Chest": "上半身2",
-    "UpperChest": "上半身3",
     "Neck": "首",
     "Head": "頭",
     "LeftEye": "左目",
