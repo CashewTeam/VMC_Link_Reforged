@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "vmc_link"
-version = "1.0.10"
+version = "1.1.2"
 name = "VMC_Link_Reforged"
 tagline = "VMC and RhyLive ARKit receiver with mapping presets"
 maintainer = "Internet Addict"
@@ -22,9 +22,13 @@ network = "Receive OSC / VMC motion data over UDP"
 
 [build]
 paths_exclude_pattern = [
+  ".agents/",
   "__pycache__/",
   ".DS_Store",
   ".git",
+  ".gitignore",
+  "AGENTS.md",
   "RhyLiveSDK_Unity-main/",
+  "*.blend1",
   "*.zip",
 ]

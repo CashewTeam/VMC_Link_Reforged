@@ -5,6 +5,13 @@ from ..preview import dummy_vrm
 from ..runtime import driver as runtime
 
 
+def _draw_status_rows(layout, rows):
+    for left_entry, right_entry in rows:
+        row = layout.row(align=True)
+        row.label(text=left_entry[0], icon=left_entry[1])
+        row.label(text=right_entry[0], icon=right_entry[1])
+
+
 class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):
     bl_label = "中间层预览"
     bl_idname = "VMC_LINK_PT_intermediate_panel"
@@ -24,25 +31,28 @@ class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):
         body_col.label(text="VRM 预览骨架", icon="ARMATURE_DATA")
         calibration_info = mapping_target_rig.analyze_scene_target(scene, getattr(scene, "vmc_link_armature", None))
         selected_adapter = calibration_info["selected_adapter"]
-        body_col.label(text=f"当前校准策略: {selected_adapter.label}", icon="INFO")
-        if selected_adapter.rig_id != mapping_target_rig.TARGET_RIG_GENERIC and calibration_info["resolved_rig"] != selected_adapter.rig_id:
-            body_col.label(text="当前目标骨架未通过所选类型识别，校准会被拒绝", icon="ERROR")
 
         if status["armature"] is None:
-            body_col.label(text="尚未创建 VRM 预览骨架", icon="INFO")
+            armature_status = "状态：未创建"
+            armature_icon = "INFO"
         else:
-            body_col.label(
-                text="已识别为标准中间层骨架" if status["armature_is_intermediate"] else "当前对象不是标准中间层骨架",
-                icon="CHECKMARK" if status["armature_is_intermediate"] else "ERROR",
-            )
-            body_col.label(text=f"必需骨骼: {status['required_present']} / {status['required_total']}")
-            body_col.label(text=f"手指骨骼: {status['optional_present']} / {status['optional_total']}")
-            body_col.label(text=f"已写入角色标记: {'是' if status['armature_tagged'] else '否'}")
-            body_col.label(text=f"根位移来源: {runtime.get_root_motion_source()}")
-            if status["required_missing"]:
-                missing_preview = ", ".join(status["required_missing"][:6])
-                suffix = " ..." if len(status["required_missing"]) > 6 else ""
-                body_col.label(text=f"缺失骨骼: {missing_preview}{suffix}", icon="INFO")
+            armature_status = "状态：标准骨架" if status["armature_is_intermediate"] else "状态：非标准骨架"
+            armature_icon = "CHECKMARK" if status["armature_is_intermediate"] else "ERROR"
+
+        _draw_status_rows(
+            body_col,
+            (
+                ((armature_status, armature_icon), (f"校准：{selected_adapter.label}", "INFO")),
+                ((f"必需：{status['required_present']} / {status['required_total']}", "BONE_DATA"), (f"手指：{status['optional_present']} / {status['optional_total']}", "BONE_DATA")),
+                ((f"标记：{'是' if status['armature_tagged'] else '否'}", "BOOKMARKS"), (f"根位移：{runtime.get_root_motion_source()}", "EMPTY_ARROWS")),
+            ),
+        )
+        if selected_adapter.rig_id != mapping_target_rig.TARGET_RIG_GENERIC and calibration_info["resolved_rig"] != selected_adapter.rig_id:
+            body_col.label(text="当前目标骨架未通过所选类型识别，校准会被拒绝", icon="ERROR")
+        if status["required_missing"]:
+            missing_preview = ", ".join(status["required_missing"][:6])
+            suffix = " ..." if len(status["required_missing"]) > 6 else ""
+            body_col.label(text=f"缺失骨骼: {missing_preview}{suffix}", icon="INFO")
 
         body_col.operator("vmc_link.create_dummy_armature", text="创建/重建 VRM 预览骨架", icon="ARMATURE_DATA")
         body_col.operator("vmc_link.calibrate_dummy_armature_lengths", text="按目标骨架校准长度", icon="DRIVER_DISTANCE")
@@ -50,22 +60,21 @@ class VMC_LINK_PT_intermediate_panel(bpy.types.Panel):
         face_box = layout.box()
         face_col = face_box.column(align=True)
         face_col.label(text="ARKit 52-Key 预览面部", icon="SHAPEKEY_DATA")
-        face_col.label(text=f"面部来源: {runtime.get_face_source_label(scene)}")
         if status["face_object"] is None:
-            face_col.label(text="尚未导入 ARKit 调试面部", icon="INFO")
+            face_status = "状态：未导入"
+            face_icon = "INFO"
+            face_name = "对象：-"
         else:
-            face_col.label(
-                text="已绑定 ARKit 预览面部" if status["face_object_is_preview"] else "当前对象不是 ARKit 预览面部",
-                icon="CHECKMARK" if status["face_object_is_preview"] else "ERROR",
-            )
-        face_col.label(text=f"ARKit 键覆盖数: {status['arkit_shape_matches']} / {status['arkit_key_total']}")
-        face_col.label(
-            text="调试资产可用" if status["arkit_debug_asset_exists"] else "调试资产缺失",
-            icon="CHECKMARK" if status["arkit_debug_asset_exists"] else "ERROR",
+            face_status = "状态：已绑定" if status["face_object_is_preview"] else "状态：非预览面部"
+            face_icon = "CHECKMARK" if status["face_object_is_preview"] else "ERROR"
+            face_name = f"对象：{status['face_object'].name}"
+
+        _draw_status_rows(
+            face_col,
+            (
+                ((face_status, face_icon), (f"来源：{runtime.get_face_source_label(scene)}", "INFO")),
+                ((f"键覆盖：{status['arkit_shape_matches']} / {status['arkit_key_total']}", "SHAPEKEY_DATA"), (f"资产：{'可用' if status['arkit_debug_asset_exists'] else '缺失'}", "CHECKMARK" if status["arkit_debug_asset_exists"] else "ERROR")),
+                ((f"实时驱动：{'是' if runtime.is_arkit_face_source_enabled(scene) else '否'}", "DRIVER"), (face_name, "OBJECT_DATA")),
+            ),
         )
-        if runtime.is_arkit_face_source_enabled(scene):
-            face_col.label(text="当前会按 ARKit 52 Key 实时驱动该预览面部", icon="INFO")
-        else:
-            face_col.label(text="仅当面部来源为 RhyLive ARKit 时才会驱动该预览面部", icon="INFO")
         face_col.operator("vmc_link.import_arkit_preview_face", text="导入 ARKit 调试面部", icon="IMPORT")
-        face_col.label(text=status["arkit_debug_asset_path"])

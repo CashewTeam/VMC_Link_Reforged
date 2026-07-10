@@ -2,6 +2,7 @@ import select
 import socket
 import threading
 import time
+import math
 
 import bpy
 from pythonosc.dispatcher import Dispatcher
@@ -319,6 +320,56 @@ def _raw_pose_changed(previous_pose, current_pose) -> bool:
     return (1.0 - min(1.0, max(-1.0, dot))) > constants.ROT_EPS
 
 
+def _normalize_quaternion(values):
+    length = math.sqrt(sum(float(value) * float(value) for value in values))
+    return tuple(float(value) / length for value in values)
+
+
+def _slerp_quaternion(previous, current, factor: float):
+    dot = sum(float(previous[index]) * float(current[index]) for index in range(4))
+    if dot < 0.0:
+        current = tuple(-float(value) for value in current)
+        dot = -dot
+    dot = min(1.0, max(-1.0, dot))
+    if dot > 0.9995:
+        blended = tuple(
+            float(previous[index]) + ((float(current[index]) - float(previous[index])) * factor)
+            for index in range(4)
+        )
+        return _normalize_quaternion(blended)
+
+    theta = math.acos(dot)
+    sin_theta = math.sin(theta)
+    previous_weight = math.sin((1.0 - factor) * theta) / sin_theta
+    current_weight = math.sin(factor * theta) / sin_theta
+    return tuple(
+        (float(previous[index]) * previous_weight) + (float(current[index]) * current_weight)
+        for index in range(4)
+    )
+
+
+def _filter_pose_rotation(previous_pose, current_pose):
+    current_rotation = _normalize_quaternion(current_pose[3:7])
+    if previous_pose is None:
+        return (*current_pose[:3], *current_rotation)
+
+    previous_rotation = _normalize_quaternion(previous_pose[3:7])
+    dot = abs(sum(previous_rotation[index] * current_rotation[index] for index in range(4)))
+    dot = min(1.0, max(-1.0, dot))
+    angle = math.degrees(2.0 * math.acos(dot))
+    if angle <= constants.VMC_ROTATION_FILTER_DEADBAND_DEG:
+        filtered_rotation = previous_rotation
+    elif angle >= constants.VMC_ROTATION_FILTER_FAST_ANGLE_DEG:
+        filtered_rotation = current_rotation
+    else:
+        filtered_rotation = _slerp_quaternion(
+            previous_rotation,
+            current_rotation,
+            constants.VMC_ROTATION_FILTER_MIN_ALPHA,
+        )
+    return (*current_pose[:3], *filtered_rotation)
+
+
 def _flush_raw_frame_locked():
     if not state.raw_frame_pending:
         return None
@@ -400,9 +451,14 @@ def on_vmc_bone_pos(_address, *args):
         packet_ts = time.time()
         state.last_packet_ts = packet_ts
         state.bone_buf[bone_name] = pose
+        previous_filtered_pose = state.filtered_bone_buf.get(bone_name)
+        filtered_pose = _filter_pose_rotation(previous_filtered_pose, pose)
+        state.filtered_bone_buf[bone_name] = filtered_pose
         canonical_name = mapping.canonical_vmc_bone_name(bone_name)
         if canonical_name:
-            state.canonical_bone_buf[canonical_name] = pose
+            if not _raw_pose_changed(state.canonical_bone_buf.get(canonical_name), filtered_pose):
+                return
+            state.canonical_bone_buf[canonical_name] = filtered_pose
             state.raw_frame_dirty_bone_names.add(canonical_name)
         state.raw_frame_body_dirty = True
         state.dirty = True
@@ -422,11 +478,16 @@ def on_vmc_root_pos(_address, *args):
 
     with state.buffer_lock:
         pose = (px, py, pz, qx, qy, qz, qw)
-        if not _raw_pose_changed(state.root_buf, pose):
+        if not _raw_pose_changed(state.root_raw_buf, pose):
             return
         packet_ts = time.time()
         state.last_packet_ts = packet_ts
-        state.root_buf = pose
+        state.root_raw_buf = pose
+        filtered_pose = _filter_pose_rotation(state.filtered_root_buf, pose)
+        state.filtered_root_buf = filtered_pose
+        if not _raw_pose_changed(state.root_buf, filtered_pose):
+            return
+        state.root_buf = filtered_pose
         state.raw_frame_body_dirty = True
         state.dirty = True
         _mark_raw_frame_activity_locked(packet_ts)
@@ -446,11 +507,16 @@ def on_vmc_tra_pos(_address, *args):
 
     with state.buffer_lock:
         pose = (px, py, pz, qx, qy, qz, qw)
-        if not _raw_pose_changed(state.waist_buf, pose):
+        if not _raw_pose_changed(state.waist_raw_buf, pose):
             return
         packet_ts = time.time()
         state.last_packet_ts = packet_ts
-        state.waist_buf = pose
+        state.waist_raw_buf = pose
+        filtered_pose = _filter_pose_rotation(state.filtered_waist_buf, pose)
+        state.filtered_waist_buf = filtered_pose
+        if not _raw_pose_changed(state.waist_buf, filtered_pose):
+            return
+        state.waist_buf = filtered_pose
         state.raw_frame_body_dirty = True
         state.dirty = True
         _mark_raw_frame_activity_locked(packet_ts)
@@ -530,7 +596,7 @@ def start_server(scene):
     arkit_socket = None
     try:
         bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
-        runtime.capture_receiver_start_state(scene)
+        runtime.capture_receiver_start_state_at_zero_frame(scene)
     except Exception:
         if vmc_socket is not None:
             vmc_socket.close()

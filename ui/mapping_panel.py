@@ -70,6 +70,42 @@ def _truncate_ui_line(text: str, limit: int = 96) -> str:
     return value[: limit - 1] + "..."
 
 
+def _draw_status_rows(layout, rows):
+    for left_entry, right_entry in rows:
+        row = layout.row(align=True)
+        row.label(text=left_entry[0], icon=left_entry[1])
+        row.label(text=right_entry[0], icon=right_entry[1])
+
+
+def _draw_mmd_report(report_box, report_text: str):
+    report_lines = [line.strip() for line in report_text.splitlines() if line.strip()]
+    compact_labels = ("MMD 识别", "必需骨", "可选骨", "眼睛", "根位移", "手指")
+    compact_entries = {}
+    detail_lines = []
+    for line in report_lines:
+        label, separator, _value = line.partition(":")
+        if separator and label in compact_labels:
+            compact_entries[label] = line
+        else:
+            detail_lines.append(line)
+
+    if all(label in compact_entries for label in compact_labels):
+        detection_icon = "CHECKMARK" if compact_entries["MMD 识别"].endswith("通过") else "ERROR"
+        _draw_status_rows(
+            report_box,
+            (
+                ((compact_entries["MMD 识别"], detection_icon), (compact_entries["根位移"], "EMPTY_ARROWS")),
+                ((compact_entries["必需骨"], "BONE_DATA"), (compact_entries["可选骨"], "BONE_DATA")),
+                ((compact_entries["眼睛"], "HIDE_OFF"), (compact_entries["手指"], "HAND")),
+            ),
+        )
+    else:
+        detail_lines = report_lines
+
+    for line in detail_lines:
+        report_box.label(text=_truncate_ui_line(line), icon="DOT")
+
+
 def draw_arp_helper(layout, scene):
     box = layout.box()
     col = box.column(align=True)
@@ -107,18 +143,19 @@ def draw_mmd_helper(layout, scene):
     box = layout.box()
     col = box.column(align=True)
     col.label(text="MMD 辅助", icon="OUTLINER_OB_ARMATURE")
-    col.label(text=f"内建预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_MMD).builtin_preset_file}", icon="INFO")
-    col.label(text=f"默认名表: {len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", icon="INFO")
-    col.label(text="支持标准 MMD 骨名与 .L/.R 侧别名解析", icon="INFO")
-    col.label(text="根位移写入骨骼由 CenterMotion 映射项决定，MMD 默认使用 グルーブ", icon="INFO")
-    col.prop(scene, "vmc_link_mmd_mirror_roll_side", text="镜像 Roll 校正侧")
+    _draw_status_rows(
+        col,
+        (
+            ((f"预设：{mapping_target_rig.adapter_by_id(mapping_target_rig.TARGET_RIG_MMD).builtin_preset_file}", "FILE_FOLDER"), (f"名表：{len(mapping_mmd.MMD_DEFAULT_BONE_TARGETS)} 项", "BONE_DATA")),
+            (("骨名：标准 + .L/.R", "INFO"), ("根位移：CenterMotion → グルーブ", "EMPTY_ARROWS")),
+        ),
+    )
+    col.prop(scene, "vmc_link_mmd_mirror_roll_side", text="镜像 Roll")
 
     row = col.row(align=True)
-    row.operator("vmc_link.inspect_mmd_rig", text="检查 MMD 骨架", icon="VIEWZOOM")
-    row.operator("vmc_link.autofill_mmd_bone_map", text="应用标准 MMD 映射", icon="SHADERFX")
-
-    validate_row = col.row(align=True)
-    validate_row.operator("vmc_link.validate_mmd_bone_map", text="校验当前映射", icon="CHECKMARK")
+    row.operator("vmc_link.inspect_mmd_rig", text="检查", icon="VIEWZOOM")
+    row.operator("vmc_link.autofill_mmd_bone_map", text="应用映射", icon="SHADERFX")
+    row.operator("vmc_link.validate_mmd_bone_map", text="校验", icon="CHECKMARK")
 
     report_title = str(getattr(scene, "vmc_link_mmd_report_title", "")).strip()
     report_text = str(getattr(scene, "vmc_link_mmd_report", "")).strip()
@@ -129,8 +166,7 @@ def draw_mmd_helper(layout, scene):
     report_box = col.box()
     icon = "CHECKMARK" if bool(getattr(scene, "vmc_link_mmd_is_detected", False)) else "ERROR"
     report_box.label(text=report_title or "MMD 报告", icon=icon)
-    for line in report_text.splitlines():
-        report_box.label(text=_truncate_ui_line(line), icon="DOT")
+    _draw_mmd_report(report_box, report_text)
 
 
 def draw_vrm_helper(layout, scene):
@@ -173,22 +209,43 @@ class VMC_LINK_PT_bone_mapping_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        layout.prop(scene, "vmc_link_target_rig_type", text="目标骨架类型")
         arm_obj = getattr(scene, "vmc_link_armature", None)
         rig_info = mapping_target_rig.analyze_scene_target(scene, arm_obj)
         rig_type = str(rig_info["selected_rig"]).upper()
         runtime_rig = str(rig_info["resolved_rig"]).upper()
         runtime_strategy = str(rig_info["runtime_strategy"]).upper()
+        type_row = layout.row(align=True)
+        type_row.prop(scene, "vmc_link_target_rig_type", text="类型")
         state_box = layout.box()
-        state_box.label(text=f"运行时目标类型: {runtime_rig}", icon="INFO")
-        state_box.label(text=f"运行时驱动策略: {runtime_strategy}", icon="INFO")
+        target_label = f"对象：{_truncate_ui_line(arm_obj.name, 28)}" if mapping.has_pose_bones(arm_obj) else "对象：未绑定"
+        is_special_rig = rig_type in {"ARP", "MMD"}
+        is_resolved = (not is_special_rig) or runtime_rig == rig_type
+        if rig_type == "GENERIC":
+            mapping_status = "状态：通用链路"
+            mapping_icon = "INFO"
+            runtime_path = "路径：通用"
+        elif is_resolved:
+            mapping_status = "状态：识别通过"
+            mapping_icon = "CHECKMARK"
+            runtime_path = f"路径：{runtime_rig} 专用"
+        else:
+            mapping_status = "状态：识别失败"
+            mapping_icon = "ERROR"
+            runtime_path = "路径：通用回退"
+
+        _draw_status_rows(
+            state_box,
+            (
+                ((target_label, "ARMATURE_DATA"), (f"选择：{rig_type}", "INFO")),
+                ((f"识别：{runtime_rig}", "INFO"), (f"策略：{runtime_strategy}", "DRIVER")),
+                ((mapping_status, mapping_icon), (runtime_path, "SHADERFX")),
+            ),
+        )
         if rig_type == "ARP" and rig_info["resolved_rig"] != mapping_target_rig.TARGET_RIG_ARP:
             state_box.label(text="当前目标骨架未识别为 ARP，运行时将回退到通用骨架路径", icon="ERROR")
         if rig_type == "MMD":
             if rig_info["resolved_rig"] != mapping_target_rig.TARGET_RIG_MMD:
                 state_box.label(text="当前目标骨架未识别为 MMD，运行时将回退到通用骨架路径", icon="ERROR")
-            else:
-                state_box.label(text="当前 MMD 类型已接入专用运行时入口", icon="CHECKMARK")
         if rig_type == "ARP":
             draw_arp_helper(layout, scene)
         elif rig_type == "MMD":

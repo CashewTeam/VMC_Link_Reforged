@@ -129,24 +129,6 @@ def _current_recording_actions(scene):
     return arm_action, face_action
 
 
-def get_recording_action_labels(scene):
-    arm_action, face_action = _current_recording_actions(scene)
-    arm_obj = getattr(scene, "vmc_link_armature", None) if scene is not None else None
-    face_obj = getattr(scene, "vmc_link_face_object", None) if scene is not None else None
-
-    if mapping.has_pose_bones(arm_obj):
-        arm_label = arm_action.name if arm_action is not None else "开始录制时自动创建"
-    else:
-        arm_label = "未绑定目标骨架"
-
-    if mapping.has_shape_keys(face_obj):
-        face_label = face_action.name if face_action is not None else "开始录制时自动创建"
-    else:
-        face_label = "未绑定目标面部"
-
-    return {"armature": arm_label, "face": face_label}
-
-
 def _validate_recording_config(scene):
     error = get_recording_range_error(scene)
     if error:
@@ -156,6 +138,10 @@ def _validate_recording_config(scene):
     frame_end = int(getattr(scene, "vmc_link_record_end_frame", frame_start))
     transition_enabled = bool(getattr(scene, "vmc_link_record_transition_enabled", True))
     transition_frames = int(getattr(scene, "vmc_link_record_transition_frames", 24))
+    motion_enabled = bool(getattr(scene, "vmc_link_record_motion_enabled", True))
+    shape_keys_enabled = bool(getattr(scene, "vmc_link_record_shape_keys_enabled", True))
+    if not motion_enabled and not shape_keys_enabled:
+        raise RuntimeError("请至少启用“动作录制”或“形态键录制”")
     total_frames = max(1, frame_end - frame_start + 1)
     if transition_enabled:
         transition_frames = min(max(1, transition_frames), total_frames)
@@ -166,6 +152,8 @@ def _validate_recording_config(scene):
         "frame_start": frame_start,
         "frame_end": frame_end,
         "interpolation_enabled": bool(getattr(scene, "vmc_link_record_interpolation_enabled", True)),
+        "motion_enabled": motion_enabled,
+        "shape_keys_enabled": shape_keys_enabled,
         "transition_enabled": transition_enabled and transition_frames > 0,
         "transition_frames": transition_frames,
     }
@@ -183,10 +171,14 @@ def start_recording(scene):
 
     arm_obj = getattr(scene, "vmc_link_armature", None)
     face_obj = getattr(scene, "vmc_link_face_object", None)
-    if not mapping.has_pose_bones(arm_obj) and not mapping.has_shape_keys(face_obj):
-        raise RuntimeError("请先绑定目标骨架或目标面部")
 
     config = _validate_recording_config(scene)
+    record_motion = bool(config["motion_enabled"])
+    record_shape_keys = bool(config["shape_keys_enabled"])
+    if record_motion and not mapping.has_pose_bones(arm_obj):
+        raise RuntimeError("动作录制需要先绑定目标骨架")
+    if record_shape_keys and not mapping.has_shape_keys(face_obj):
+        raise RuntimeError("形态键录制需要先绑定目标面部")
     frame_start = int(config["frame_start"])
     scene.frame_set(0)
     try:
@@ -196,13 +188,19 @@ def start_recording(scene):
     bpy.context.view_layer.update()
 
     preview_arm = getattr(scene, "vmc_link_preview_armature", None)
-    target_context = _ensure_receiver_target_context(scene, arm_obj, preview_arm) if mapping.has_pose_bones(arm_obj) else None
+    target_context = _ensure_receiver_target_context(scene, arm_obj, preview_arm) if record_motion else None
     recording_mmd_root_motion_start_location = _rebase_mmd_root_motion_location(target_context)
-    record_bones = _recordable_target_bones(scene, arm_obj, target_context)
-    record_shapes = _recordable_target_shapes(scene, face_obj, is_arkit_face_source_enabled(scene))
-    transition_source_sample = _build_recording_transition_source_sample(arm_obj, record_bones, face_obj, record_shapes, target_context)
+    record_bones = _recordable_target_bones(scene, arm_obj, target_context) if record_motion else set()
+    record_shapes = _recordable_target_shapes(scene, face_obj, is_arkit_face_source_enabled(scene)) if record_shape_keys else set()
+    transition_source_sample = _build_recording_transition_source_sample(
+        arm_obj if record_motion else None,
+        record_bones,
+        face_obj if record_shape_keys else None,
+        record_shapes,
+        target_context,
+    )
 
-    _prepare_recording_target_actions(arm_obj, face_obj)
+    _prepare_recording_target_actions(scene, arm_obj if record_motion else None, face_obj if record_shape_keys else None)
     state.recording = True
     state.recording_start_frame = frame_start
     state.recording_end_frame = int(config["frame_end"])
@@ -220,14 +218,16 @@ def start_recording(scene):
     state.recording_raw_frames = []
     state.recording_last_sample = None
     state.recording_interpolation_enabled = bool(config["interpolation_enabled"])
+    state.recording_motion_enabled = record_motion
+    state.recording_shape_keys_enabled = record_shape_keys
     state.recording_transition_enabled = bool(config["transition_enabled"])
     state.recording_transition_frames = int(config["transition_frames"])
     state.recording_transition_pending = bool(config["transition_enabled"])
     state.recording_transition_source_sample = transition_source_sample if config["transition_enabled"] else None
     state.recording_transition_target_sample = None
     state.recording_mmd_root_motion_start_location = recording_mmd_root_motion_start_location
-    state.recording_armature_ref = arm_obj if mapping.has_pose_bones(arm_obj) else None
-    state.recording_face_ref = face_obj if mapping.has_shape_keys(face_obj) else None
+    state.recording_armature_ref = arm_obj if record_motion else None
+    state.recording_face_ref = face_obj if record_shape_keys else None
     state.recording_object_rotation_mode = _recording_object_rotation_mode(arm_obj) if arm_obj is not None else ""
     state.recording_bone_rotation_modes = _build_recording_bone_rotation_mode_cache(arm_obj)
     state.recording_pose_bones = (
@@ -548,6 +548,17 @@ def capture_receiver_start_state(scene):
     state.receiver_target_context = _build_receiver_target_context(scene)
     state.receiver_session_active = True
     state.receiver_paused = False
+
+
+def capture_receiver_start_state_at_zero_frame(scene):
+    frame_current = int(scene.frame_current)
+    frame_subframe = float(scene.frame_subframe)
+    scene.frame_set(0)
+    try:
+        capture_receiver_start_state(scene)
+    finally:
+        scene.frame_set(frame_current, subframe=frame_subframe)
+    bpy.context.view_layer.update()
 
 
 def _receiver_face_snapshot(face_obj):
@@ -1217,10 +1228,10 @@ def draw_preview_entries(layout, title: str, entries, empty_text: str):
         col.label(text=entry)
 
 
-def _prepare_recording_target_actions(arm, face):
+def _prepare_recording_target_actions(scene, arm, face):
     if mapping.has_pose_bones(arm):
         arm.animation_data_create()
-        action = arm.animation_data.action
+        action = getattr(scene, "vmc_link_record_armature_action", None)
         if action is None:
             action = bpy.data.actions.new(f"{arm.name}_VMC_Link_Action")
         action.use_fake_user = True
@@ -1230,7 +1241,7 @@ def _prepare_recording_target_actions(arm, face):
     if mapping.has_shape_keys(face):
         shape_keys = face.data.shape_keys
         shape_keys.animation_data_create()
-        action = shape_keys.animation_data.action
+        action = getattr(scene, "vmc_link_record_face_action", None)
         if action is None:
             action = bpy.data.actions.new(f"{face.name}_VMC_Link_ShapeKeys")
         action.use_fake_user = True
@@ -1513,6 +1524,8 @@ def _clear_recording_runtime_state():
     state.recording_raw_frames = []
     state.recording_last_sample = None
     state.recording_interpolation_enabled = True
+    state.recording_motion_enabled = True
+    state.recording_shape_keys_enabled = True
     state.recording_transition_enabled = False
     state.recording_transition_frames = 0
     state.recording_transition_pending = False
@@ -1797,6 +1810,7 @@ def _process_recording_bake_tracks_chunk(session):
 
 def _finish_recording_bake_session():
     session = state.recording_bake_session or {}
+    scene = session.get("scene")
     session["status_label"] = "正在完成录制保存"
     session["status_detail"] = "正在重新绑定动作数据"
     session["progress_value"] = max(int(session.get("progress_value", 0)), RECORDING_BAKE_PROGRESS_TOTAL - 5)
@@ -1807,12 +1821,16 @@ def _finish_recording_bake_session():
         if getattr(arm, "type", None) == "ARMATURE":
             arm.animation_data_create()
             _bind_recorded_action(arm.animation_data, state.recording_armature_action, arm)
+            if scene is not None:
+                scene.vmc_link_record_armature_action = state.recording_armature_action
     if state.recording_face_ref is not None and state.recording_face_action is not None:
         face = state.recording_face_ref
         if mapping.has_shape_keys(face):
             shape_keys = face.data.shape_keys
             shape_keys.animation_data_create()
             _bind_recorded_action(shape_keys.animation_data, state.recording_face_action, shape_keys)
+            if scene is not None:
+                scene.vmc_link_record_face_action = state.recording_face_action
 
     if _is_recording_bake_timer_registered():
         bpy.app.timers.unregister(_recording_bake_timer)

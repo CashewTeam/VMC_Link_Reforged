@@ -4,9 +4,7 @@ from ..runtime import driver as runtime
 from ..runtime import network
 
 
-def draw_main_panel(layout, context):
-    scene = context.scene
-
+def draw_receiver_controls(layout):
     row = layout.row(align=True)
     if network.is_session_active():
         pause_label = "继续接收" if network.is_paused() else "暂停接收"
@@ -15,6 +13,12 @@ def draw_main_panel(layout, context):
         row.operator("vmc_link.stop_receiver", text="停止接收", icon="CANCEL")
     else:
         row.operator("vmc_link.start_receiver", text="启动接收", icon="PLAY")
+
+
+def draw_main_panel(layout, context):
+    scene = context.scene
+
+    draw_receiver_controls(layout)
 
     if network.is_session_active():
         if network.is_paused():

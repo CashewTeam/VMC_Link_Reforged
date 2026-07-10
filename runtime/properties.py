@@ -115,6 +115,44 @@ def _on_face_object_changed(self, _context):
     mapping.handle_face_object_changed(self)
 
 
+def _reset_recording_action_switch_pose(scene):
+    scene.frame_set(0)
+    bpy.context.view_layer.update()
+
+
+def _on_record_armature_action_changed(self, _context):
+    action = getattr(self, "vmc_link_record_armature_action", None)
+    arm = getattr(self, "vmc_link_armature", None)
+    if state.recording or state.recording_bake_session is not None or not mapping.has_pose_bones(arm):
+        return
+
+    from . import driver
+
+    _reset_recording_action_switch_pose(self)
+    arm.animation_data_create()
+    if action is None:
+        arm.animation_data.action = None
+        return
+    driver._bind_recorded_action(arm.animation_data, action, arm)
+
+
+def _on_record_face_action_changed(self, _context):
+    action = getattr(self, "vmc_link_record_face_action", None)
+    face = getattr(self, "vmc_link_face_object", None)
+    if state.recording or state.recording_bake_session is not None or not mapping.has_shape_keys(face):
+        return
+
+    from . import driver
+
+    _reset_recording_action_switch_pose(self)
+    shape_keys = face.data.shape_keys
+    shape_keys.animation_data_create()
+    if action is None:
+        shape_keys.animation_data.action = None
+        return
+    driver._bind_recorded_action(shape_keys.animation_data, action, shape_keys)
+
+
 FIXED_SCENE_PROPS = (
     "vmc_link_port",
     "vmc_link_bind_mode",
@@ -132,6 +170,10 @@ FIXED_SCENE_PROPS = (
     "vmc_link_preview_face_object",
     "vmc_link_record_start_frame",
     "vmc_link_record_end_frame",
+    "vmc_link_record_motion_enabled",
+    "vmc_link_record_shape_keys_enabled",
+    "vmc_link_record_armature_action",
+    "vmc_link_record_face_action",
     "vmc_link_record_transition_enabled",
     "vmc_link_record_transition_frames",
     "vmc_link_bone_map_preset",
@@ -279,6 +321,28 @@ def ensure_scene_props():
         name="录制结束帧",
         description="录制输出写入的结束帧，达到后自动停止",
         default=record_end_default,
+    )
+    scene_type.vmc_link_record_motion_enabled = bpy.props.BoolProperty(
+        name="动作录制",
+        description="将目标骨架的对象与骨骼动作写入 Action",
+        default=True,
+    )
+    scene_type.vmc_link_record_shape_keys_enabled = bpy.props.BoolProperty(
+        name="形态键录制",
+        description="将目标面部的 Shape Key 数值写入 Action",
+        default=True,
+    )
+    scene_type.vmc_link_record_armature_action = bpy.props.PointerProperty(
+        name="目标骨架 Action",
+        description="留空时解除目标骨架当前 Action；开始录制时自动新建",
+        type=bpy.types.Action,
+        update=_on_record_armature_action_changed,
+    )
+    scene_type.vmc_link_record_face_action = bpy.props.PointerProperty(
+        name="目标面部 Action",
+        description="留空时解除目标面部当前 Shape Key Action；开始录制时自动新建",
+        type=bpy.types.Action,
+        update=_on_record_face_action_changed,
     )
     scene_type.vmc_link_record_transition_enabled = bpy.props.BoolProperty(
         name="启用起始姿态过渡",

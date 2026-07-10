@@ -426,6 +426,39 @@ class VMC_LINK_OT_toggle_recording(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class VMC_LINK_OT_new_recording_action(bpy.types.Operator):
+    bl_idname = "vmc_link.new_recording_action"
+    bl_label = "新建录制 Action"
+
+    target: bpy.props.EnumProperty(
+        items=(
+            ("ARMATURE", "目标骨架", "为目标骨架新建 Action"),
+            ("FACE", "目标面部", "为目标面部新建 Shape Key Action"),
+        ),
+    )
+
+    def execute(self, context):
+        scene = context.scene
+        if self.target == "ARMATURE":
+            arm = getattr(scene, "vmc_link_armature", None)
+            if not mapping.has_pose_bones(arm):
+                self.report({"ERROR"}, "请先绑定目标骨架")
+                return {"CANCELLED"}
+            action = bpy.data.actions.new(f"{arm.name}_VMC_Link_Action")
+            scene.vmc_link_record_armature_action = action
+        else:
+            face = getattr(scene, "vmc_link_face_object", None)
+            if not mapping.has_shape_keys(face):
+                self.report({"ERROR"}, "请先绑定带 Shape Key 的目标面部")
+                return {"CANCELLED"}
+            action = bpy.data.actions.new(f"{face.name}_VMC_Link_ShapeKeys")
+            scene.vmc_link_record_face_action = action
+
+        action.use_fake_user = True
+        self.report({"INFO"}, f"已新建录制 Action：{action.name}")
+        return {"FINISHED"}
+
+
 class VMC_LINK_OT_set_record_start_to_current_frame(bpy.types.Operator):
     bl_idname = "vmc_link.set_record_start_to_current_frame"
     bl_label = "当前帧设为开始"
@@ -496,6 +529,7 @@ CLASSES = (
     VMC_LINK_OT_autofill_mmd_bone_map,
     VMC_LINK_OT_validate_mmd_bone_map,
     VMC_LINK_OT_toggle_recording,
+    VMC_LINK_OT_new_recording_action,
     VMC_LINK_OT_set_record_start_to_current_frame,
     VMC_LINK_OT_set_record_end_to_current_frame,
     VMC_LINK_OT_clear_recording_range_keys,

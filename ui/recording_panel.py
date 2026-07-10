@@ -1,7 +1,7 @@
 import bpy
 
 from ..runtime import driver as runtime
-from ..runtime import network
+from .main_panel import draw_receiver_controls
 
 
 class VMC_LINK_PT_recording_panel(bpy.types.Panel):
@@ -18,33 +18,41 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         is_recording = runtime.is_recording()
         is_baking = runtime.is_recording_bake_active()
         bake_status = runtime.get_recording_bake_status()
-        action_labels = runtime.get_recording_action_labels(scene)
         range_error = runtime.get_recording_range_error(scene)
         frame_start = runtime.get_recording_start_frame(scene)
         frame_end = runtime.get_recording_end_frame(scene)
         interpolation_enabled = runtime.is_recording_interpolation_enabled(scene)
         transition_enabled = runtime.is_recording_transition_enabled(scene)
         transition_frames = runtime.get_recording_transition_frames(scene)
+        record_parts = []
+        if bool(getattr(scene, "vmc_link_record_motion_enabled", True)):
+            record_parts.append("动作")
+        if bool(getattr(scene, "vmc_link_record_shape_keys_enabled", True)):
+            record_parts.append("形态键")
+        record_content = "+".join(record_parts) or "无"
 
         status_box = layout.box()
         status_col = status_box.column(align=True)
         status_col.label(text="录制状态", icon="REC")
         if is_recording:
-            status_col.label(text=f"录制中：已缓存 {runtime.get_recording_sample_count()} 帧", icon="REC")
+            status_text = f"录制中：{runtime.get_recording_sample_count()} 帧"
+            status_icon = "REC"
         elif is_baking:
-            status_col.label(text=f"保存中：{bake_status['label']}", icon="TIME")
-            if bake_status["detail"]:
-                status_col.label(text=bake_status["detail"], icon="INFO")
-            status_col.label(text=f"已缓存 {runtime.get_recording_sample_count()} 帧待写入", icon="INFO")
+            status_text = f"保存中：{bake_status['label']}"
+            status_icon = "TIME"
         else:
-            status_col.label(text="当前未在录制", icon="INFO")
-        status_col.label(text=f"输出范围：{frame_start} - {frame_end}")
-        status_col.label(text=f"补帧插值：{'启用' if interpolation_enabled else '关闭'}")
-        status_col.label(text=f"起始过渡：{'启用' if transition_enabled else '关闭'}")
-        if transition_enabled:
-            status_col.label(text=f"过渡帧数：{transition_frames}")
-        status_col.label(text=f"目标骨架 Action：{action_labels['armature']}")
-        status_col.label(text=f"目标面部 Action：{action_labels['face']}")
+            status_text = "当前未在录制"
+            status_icon = "INFO"
+
+        status_rows = (
+            ((status_text, status_icon), (f"输出：{frame_start} - {frame_end}", "PREVIEW_RANGE")),
+            ((f"内容：{record_content}", "ACTION"), (f"补帧：{'启用' if interpolation_enabled else '关闭'}", "IPO_EASE_IN_OUT")),
+            ((f"过渡：{'启用' if transition_enabled else '关闭'}", "IPO_EASE_IN_OUT"), (f"过渡帧：{transition_frames if transition_enabled else '-'}", "TIME")),
+        )
+        for left_entry, right_entry in status_rows:
+            row = status_col.row(align=True)
+            row.label(text=left_entry[0], icon=left_entry[1])
+            row.label(text=right_entry[0], icon=right_entry[1])
 
         range_box = layout.box()
         range_col = range_box.column(align=True)
@@ -69,9 +77,7 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         action_box = layout.box()
         action_col = action_box.column(align=True)
         action_col.label(text="录制操作", icon="ACTION")
-        preview_row = action_col.row(align=True)
-        preview_row.enabled = (not network.is_session_active()) and (not is_baking)
-        preview_row.operator("vmc_link.start_receiver", text="启动接收", icon="PLAY")
+        draw_receiver_controls(action_col)
         button_row = action_col.row(align=True)
         button_row.enabled = (not bool(range_error)) and (not is_baking)
         if is_baking:
@@ -81,6 +87,30 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
             rec_icon = "PAUSE" if is_recording else "REC"
             rec_label = "停止录制" if is_recording else "开始录制"
         button_row.operator("vmc_link.toggle_recording", text=rec_label, icon=rec_icon)
+
+        record_mode_row = action_col.row(align=True)
+        record_mode_row.enabled = (not is_recording) and (not is_baking)
+        record_mode_row.prop(scene, "vmc_link_record_motion_enabled", text="动作录制")
+        record_mode_row.prop(scene, "vmc_link_record_shape_keys_enabled", text="形态键录制")
+
+        action_select_col = action_col.column(align=True)
+        action_select_col.enabled = (not is_recording) and (not is_baking)
+        action_select_col.label(text="录制 Action", icon="ACTION")
+        armature_split = action_select_col.row(align=True).split(factor=0.18, align=True)
+        armature_split.column(align=True).label(text="目标骨架")
+        armature_action_row = armature_split.row(align=True)
+        armature_action_row.prop(scene, "vmc_link_record_armature_action", text="")
+        armature_new_row = armature_action_row.row(align=True)
+        armature_new_row.scale_x = 0.65
+        armature_new_row.operator("vmc_link.new_recording_action", text="新建", icon="ADD").target = "ARMATURE"
+        face_split = action_select_col.row(align=True).split(factor=0.18, align=True)
+        face_split.column(align=True).label(text="目标面部")
+        face_action_row = face_split.row(align=True)
+        face_action_row.prop(scene, "vmc_link_record_face_action", text="")
+        face_new_row = face_action_row.row(align=True)
+        face_new_row.scale_x = 0.65
+        face_new_row.operator("vmc_link.new_recording_action", text="新建", icon="ADD").target = "FACE"
+        action_select_col.label(text="留空会解除当前绑定；开始录制时自动新建", icon="INFO")
 
         clear_row = action_col.row(align=True)
         clear_row.enabled = (not is_recording) and (not is_baking) and (not bool(range_error))

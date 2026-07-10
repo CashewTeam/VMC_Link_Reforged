@@ -15,7 +15,12 @@ buffer_lock = threading.Lock()
 
 root_buf = None
 waist_buf = None
+root_raw_buf = None
+waist_raw_buf = None
+filtered_root_buf = None
+filtered_waist_buf = None
 bone_buf = {}
+filtered_bone_buf = {}
 canonical_bone_buf = {}
 blend_buf = {}
 canonical_vmc_blend_buf = {}
@@ -79,6 +84,8 @@ recording_tracks = {}
 recording_raw_frames = []
 recording_last_sample = None
 recording_interpolation_enabled = True
+recording_motion_enabled = True
+recording_shape_keys_enabled = True
 recording_transition_enabled = False
 recording_transition_frames = 0
 recording_transition_pending = False
@@ -110,7 +117,7 @@ receiver_preview_apply_shape_values = {}
 
 
 def reset_runtime_buffers():
-    global root_buf, waist_buf, bone_buf, canonical_bone_buf, blend_buf, canonical_vmc_blend_buf, arkit_blend_buf
+    global root_buf, waist_buf, root_raw_buf, waist_raw_buf, filtered_root_buf, filtered_waist_buf, bone_buf, filtered_bone_buf, canonical_bone_buf, blend_buf, canonical_vmc_blend_buf, arkit_blend_buf
     global dirty, last_packet_ts, arkit_last_packet_ts, next_tick_ts, next_ui_redraw_ts, view3d_redraw_signature, view3d_redraw_areas, frame_snapshot_deadline_ts
     global raw_frame_queue, raw_frame_sequence, raw_frame_pending, raw_frame_first_packet_ts, raw_frame_last_update_ts
     global raw_frame_dirty_bone_names, raw_frame_dirty_vmc_blend_names, raw_frame_dirty_arkit_blend_names
@@ -122,7 +129,12 @@ def reset_runtime_buffers():
     with buffer_lock:
         root_buf = None
         waist_buf = None
+        root_raw_buf = None
+        waist_raw_buf = None
+        filtered_root_buf = None
+        filtered_waist_buf = None
         bone_buf = {}
+        filtered_bone_buf = {}
         canonical_bone_buf = {}
         blend_buf = {}
         canonical_vmc_blend_buf = {}
