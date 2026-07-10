@@ -84,6 +84,7 @@ recording_transition_frames = 0
 recording_transition_pending = False
 recording_transition_source_sample = None
 recording_transition_target_sample = None
+recording_mmd_root_motion_start_location = None
 recording_bake_session = None
 
 receiver_session_active = False

@@ -92,6 +92,25 @@ def get_recording_range_error(scene) -> str:
     return ""
 
 
+def _rebase_mmd_root_motion_location(target_context):
+    if not target_context or target_context.get("target_runtime_strategy") != mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        return None
+    root_motion_bone = target_context.get("mmd_root_motion_bone")
+    if root_motion_bone is None:
+        return None
+    start_location = root_motion_bone.matrix.to_translation()
+    target_context["mmd_root_motion_start_location"] = start_location.copy()
+    return start_location.copy()
+
+
+def _apply_mmd_root_motion_start_location(target_context, start_location):
+    if not target_context or start_location is None:
+        return
+    if target_context.get("target_runtime_strategy") != mapping_target_rig.RUNTIME_STRATEGY_MMD:
+        return
+    target_context["mmd_root_motion_start_location"] = Vector(start_location)
+
+
 def _current_recording_actions(scene):
     arm_action = state.recording_armature_action if state.recording else None
     face_action = state.recording_face_action if state.recording else None
@@ -168,14 +187,24 @@ def start_recording(scene):
         raise RuntimeError("请先绑定目标骨架或目标面部")
 
     config = _validate_recording_config(scene)
-    target_context = _build_receiver_target_context(scene) if mapping.has_pose_bones(arm_obj) else None
+    frame_start = int(config["frame_start"])
+    scene.frame_set(0)
+    try:
+        capture_receiver_start_state(scene)
+    finally:
+        scene.frame_set(frame_start)
+    bpy.context.view_layer.update()
+
+    preview_arm = getattr(scene, "vmc_link_preview_armature", None)
+    target_context = _ensure_receiver_target_context(scene, arm_obj, preview_arm) if mapping.has_pose_bones(arm_obj) else None
+    recording_mmd_root_motion_start_location = _rebase_mmd_root_motion_location(target_context)
     record_bones = _recordable_target_bones(scene, arm_obj, target_context)
     record_shapes = _recordable_target_shapes(scene, face_obj, is_arkit_face_source_enabled(scene))
     transition_source_sample = _build_recording_transition_source_sample(arm_obj, record_bones, face_obj, record_shapes, target_context)
 
     _prepare_recording_target_actions(arm_obj, face_obj)
     state.recording = True
-    state.recording_start_frame = int(config["frame_start"])
+    state.recording_start_frame = frame_start
     state.recording_end_frame = int(config["frame_end"])
     state.recording_frame = state.recording_start_frame
     state.recording_start_ts = time.perf_counter()
@@ -196,6 +225,7 @@ def start_recording(scene):
     state.recording_transition_pending = bool(config["transition_enabled"])
     state.recording_transition_source_sample = transition_source_sample if config["transition_enabled"] else None
     state.recording_transition_target_sample = None
+    state.recording_mmd_root_motion_start_location = recording_mmd_root_motion_start_location
     state.recording_armature_ref = arm_obj if mapping.has_pose_bones(arm_obj) else None
     state.recording_face_ref = face_obj if mapping.has_shape_keys(face_obj) else None
     state.recording_object_rotation_mode = _recording_object_rotation_mode(arm_obj) if arm_obj is not None else ""
@@ -621,6 +651,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
         "mmd_root_motion_bone": None,
         "mmd_root_motion_start_rotation": None,
         "mmd_root_motion_start_matrix": None,
+        "mmd_root_motion_start_location": None,
         "generic_runtime_entries": (),
         "generic_runtime_entries_by_source": {},
         "eye_left_name": None,
@@ -701,6 +732,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
                 context["mmd_root_motion_bone"] = root_motion_bone
                 context["mmd_root_motion_start_rotation"] = root_motion_bone.rotation_quaternion.copy()
                 context["mmd_root_motion_start_matrix"] = root_motion_bone.matrix.copy()
+                context["mmd_root_motion_start_location"] = root_motion_bone.matrix.to_translation()
             if mapping.has_pose_bones(preview_arm):
                 runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
                 entries = []
@@ -1486,6 +1518,7 @@ def _clear_recording_runtime_state():
     state.recording_transition_pending = False
     state.recording_transition_source_sample = None
     state.recording_transition_target_sample = None
+    state.recording_mmd_root_motion_start_location = None
 
 
 def _start_recording_bake_session(scene):
@@ -1524,6 +1557,7 @@ def _start_recording_bake_session(scene):
         "transition_pending": bool(state.recording_transition_enabled),
         "transition_source_sample": state.recording_transition_source_sample,
         "transition_target_sample": None,
+        "mmd_root_motion_start_location": state.recording_mmd_root_motion_start_location,
         "transition_last_frame": transition_last_frame,
         "last_sample": None,
         "last_written_frame": frame_start - 1,
@@ -1612,6 +1646,10 @@ def _process_recording_bake_prepare(session):
     arm = session.get("arm")
     preview_arm = session.get("preview_arm")
     session["target_context"] = _build_receiver_target_context(scene, arm, preview_arm) if arm is not None else None
+    _apply_mmd_root_motion_start_location(
+        session["target_context"],
+        session.get("mmd_root_motion_start_location"),
+    )
     _switch_recording_bake_to_rebuild_phase(session)
     return True
 
@@ -2307,45 +2345,7 @@ def _build_recording_sample_from_evaluated(arm, evaluated_sample):
 
 
 def _build_recording_transition_source_sample(arm, record_bones, face, record_shapes, target_context=None):
-    sample = _build_recording_sample(arm, record_bones, face, record_shapes, target_context)
-
-    arm_snapshot = _receiver_armature_snapshot(arm)
-    if arm_snapshot is not None:
-        object_state = arm_snapshot.get("object_state", {})
-        sample["arm"] = {
-            "location": _as_float_tuple(object_state.get("location", (0.0, 0.0, 0.0))),
-            "rotation_mode": str(object_state.get("rotation_mode", "XYZ")),
-            "rotation_quaternion": _as_float_tuple(_rotation_quaternion_from_snapshot(object_state)),
-        }
-
-        sample["bones"] = {}
-        bone_snapshots = arm_snapshot.get("pose_bones", {})
-        for bone_name in record_bones:
-            bone_snapshot = bone_snapshots.get(bone_name)
-            if bone_snapshot is None:
-                continue
-            sample["bones"][bone_name] = {
-                "location": _as_float_tuple(bone_snapshot.get("location", (0.0, 0.0, 0.0))),
-                "rotation_mode": str(bone_snapshot.get("rotation_mode", "XYZ")),
-                "rotation_quaternion": _as_float_tuple(_rotation_quaternion_from_snapshot(bone_snapshot)),
-            }
-
-        if target_context and target_context.get("is_arp"):
-            ik_fk_switches = arm_snapshot.get("arp_state", {}).get("ik_fk_switches", {})
-            sample["ik_fk_switches"] = {}
-            for bone_name in mapping_arp.ARP_IK_FK_CONTROLS:
-                if bone_name in ik_fk_switches:
-                    sample["ik_fk_switches"][bone_name] = float(ik_fk_switches[bone_name])
-
-    face_snapshot = _receiver_face_snapshot(face)
-    if face_snapshot is not None and sample.get("shape_datablock") is not None:
-        sample["shapes"] = {}
-        snapshot_shape_keys = face_snapshot.get("shape_keys", {})
-        for key_name in record_shapes:
-            if key_name in snapshot_shape_keys:
-                sample["shapes"][key_name] = float(snapshot_shape_keys[key_name])
-
-    return sample
+    return _build_recording_sample(arm, record_bones, face, record_shapes, target_context)
 
 
 def _interpolate_recording_sample(previous_sample, current_sample, factor: float):
@@ -2600,6 +2600,10 @@ def _rebuild_recording_tracks_from_raw_frames(scene):
         "last_written_frame": frame_start - 1,
         "interpolation_enabled": bool(state.recording_interpolation_enabled),
     }
+    _apply_mmd_root_motion_start_location(
+        session["target_context"],
+        state.recording_mmd_root_motion_start_location,
+    )
     state.recording_last_sample = None
     _set_recording_progress(frame_start, frame_start - 1)
     for raw_frame in raw_frames:

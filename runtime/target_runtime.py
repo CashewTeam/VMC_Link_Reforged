@@ -278,13 +278,16 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         root_motion_bone = context.get("mmd_root_motion_bone")
         start_matrix = context.get("mmd_root_motion_start_matrix")
         start_rotation = context.get("mmd_root_motion_start_rotation")
+        start_location = context.get("mmd_root_motion_start_location")
         if root_motion_bone is not None and start_matrix is not None and start_rotation is not None:
+            if start_location is None:
+                start_location = start_matrix.to_translation()
             bone_sample = _ensure_bone_sample(sample, root_motion_bone)
             bone_sample["location"] = _mmd_root_motion_basis_location(
                 sample,
                 root_motion_bone,
                 start_matrix,
-                start_matrix.to_translation(),
+                start_location,
             )
             bone_sample["rotation_quaternion"] = start_rotation.copy()
         return
@@ -324,8 +327,11 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         root_motion_bone = context.get("mmd_root_motion_bone")
         start_matrix = context.get("mmd_root_motion_start_matrix")
         start_rotation = context.get("mmd_root_motion_start_rotation")
+        start_location = context.get("mmd_root_motion_start_location")
         if root_motion_bone is None or start_matrix is None or start_rotation is None:
             return
+        if start_location is None:
+            start_location = start_matrix.to_translation()
         object_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
         target_start_rotation = context.get("target_start_world_rotation") or arm_obj.matrix_world.to_quaternion()
         object_delta_rotation = target_start_rotation.inverted() @ delta_rotation @ target_start_rotation
@@ -339,7 +345,7 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
             sample,
             root_motion_bone,
             start_matrix,
-            start_matrix.to_translation() + object_delta,
+            start_location + object_delta,
         )
         bone_sample["rotation_quaternion"] = desired_rotation
         return
