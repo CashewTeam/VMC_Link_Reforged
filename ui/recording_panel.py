@@ -1,6 +1,7 @@
 import bpy
 
 from ..runtime import driver as runtime
+from ..runtime import network
 
 
 class VMC_LINK_PT_recording_panel(bpy.types.Panel):
@@ -68,6 +69,9 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         action_box = layout.box()
         action_col = action_box.column(align=True)
         action_col.label(text="录制操作", icon="ACTION")
+        preview_row = action_col.row(align=True)
+        preview_row.enabled = (not network.is_session_active()) and (not is_baking)
+        preview_row.operator("vmc_link.start_receiver", text="启动接收", icon="PLAY")
         button_row = action_col.row(align=True)
         button_row.enabled = (not bool(range_error)) and (not is_baking)
         if is_baking:
