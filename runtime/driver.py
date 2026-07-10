@@ -620,6 +620,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
         "arp_root_motion_start_location": None,
         "mmd_root_motion_bone": None,
         "mmd_root_motion_start_location": None,
+        "mmd_root_motion_start_rotation": None,
         "generic_runtime_entries": (),
         "generic_runtime_entries_by_source": {},
         "eye_left_name": None,
@@ -699,6 +700,7 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
             if root_motion_bone is not None:
                 context["mmd_root_motion_bone"] = root_motion_bone
                 context["mmd_root_motion_start_location"] = root_motion_bone.location.copy()
+                context["mmd_root_motion_start_rotation"] = root_motion_bone.rotation_quaternion.copy()
             if mapping.has_pose_bones(preview_arm):
                 runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
                 entries = []
@@ -1030,6 +1032,9 @@ def _ensure_target_runtime_rotation_modes(arm_obj, context):
                 pose_bone = pose.bones.get(target_name)
                 if pose_bone is not None:
                     driven_pose_bones[pose_bone.name] = pose_bone
+        root_motion_bone = context.get("mmd_root_motion_bone")
+        if root_motion_bone is not None:
+            driven_pose_bones[root_motion_bone.name] = root_motion_bone
     else:
         for _source_name, pose_bone, _source_rest, _source_rest_inv, _target_rest, _target_rest_inv in context.get("generic_runtime_entries", ()):
             if pose_bone is not None:

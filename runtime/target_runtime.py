@@ -251,9 +251,13 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
     if lock_to_center and context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
         root_motion_bone = context.get("mmd_root_motion_bone")
         start_location = context.get("mmd_root_motion_start_location")
-        if root_motion_bone is not None and start_location is not None:
+        start_rotation = context.get("mmd_root_motion_start_rotation")
+        if root_motion_bone is not None and (start_location is not None or start_rotation is not None):
             bone_sample = _ensure_bone_sample(sample, root_motion_bone)
-            bone_sample["location"] = start_location.copy()
+            if start_location is not None:
+                bone_sample["location"] = start_location.copy()
+            if start_rotation is not None:
+                bone_sample["rotation_quaternion"] = start_rotation.copy()
         return
 
     source_name, raw = _select_root_motion_pose(root, waist, bones, include_hips=not lock_to_center)
@@ -290,12 +294,23 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
     if context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
         root_motion_bone = context.get("mmd_root_motion_bone")
         start_location = context.get("mmd_root_motion_start_location")
-        if root_motion_bone is None or start_location is None:
+        start_rotation = context.get("mmd_root_motion_start_rotation")
+        if root_motion_bone is None or start_location is None or start_rotation is None:
             return
         object_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
         local_delta = root_motion_bone.bone.matrix_local.to_3x3().inverted_safe() @ object_delta
         bone_sample = _ensure_bone_sample(sample, root_motion_bone)
         bone_sample["location"] = start_location + local_delta
+        target_start_rotation = context.get("target_start_world_rotation")
+        if target_start_rotation is None:
+            target_start_rotation = arm_obj.matrix_world.to_quaternion()
+        object_delta_rotation = target_start_rotation.inverted() @ delta_rotation @ target_start_rotation
+        root_rest_rotation = root_motion_bone.bone.matrix_local.to_quaternion()
+        local_delta_rotation = root_rest_rotation.inverted() @ object_delta_rotation @ root_rest_rotation
+        local_delta_rotation.normalize()
+        desired_rotation = local_delta_rotation @ start_rotation
+        desired_rotation.normalize()
+        bone_sample["rotation_quaternion"] = desired_rotation
         return
 
     start_location = context.get("target_start_world_location")
@@ -474,7 +489,7 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
         source_start_basis_rotation,
         source_start_basis_rotation_inv,
         target_start_basis_rotation,
-        target_start_rotation,
+        _target_start_rotation,
         target_bone_ref,
         target_matrix_local,
         parent_bone,
@@ -484,6 +499,29 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
         target_start_scale,
     ) in entry_iter:
         if source_bone is None or target_bone is None:
+            continue
+
+        if mapping_mmd.uses_stable_roll_calibration(source_name):
+            source_rotation = _source_local_rotation_from_pose(
+                bones.get(source_name),
+                source_start_basis_rotation,
+                source_rest,
+                source_rest_inv,
+                source_bone,
+            )
+            source_delta = source_rotation @ source_start_basis_rotation_inv
+            source_delta.normalize()
+            target_delta = _remap_local_delta_with_rest_quaternions(
+                source_rest,
+                source_rest_inv,
+                target_rest,
+                target_rest_inv,
+                source_delta,
+            )
+            desired_rotation = target_delta @ target_start_basis_rotation
+            desired_rotation.normalize()
+            bone_sample = _ensure_bone_sample(sample, target_bone)
+            bone_sample["rotation_quaternion"] = desired_rotation
             continue
 
         if use_neutral_axis_calibration:
@@ -496,22 +534,17 @@ def _evaluate_mmd_target_armature(scene, arm_obj, bones, dirty_bone_names, blend
             source_armature_q = source_matrix.to_quaternion()
             source_armature_q.normalize()
             source_axis = (source_matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))).normalized()
-            if mapping_mmd.uses_stable_roll_calibration(source_name):
-                target_start_axis = (target_start_rotation @ Vector((0.0, 1.0, 0.0))).normalized()
-                swing = target_start_axis.rotation_difference(source_axis)
-                desired_armature_q = swing @ target_start_rotation
-            else:
-                desired_armature_q = calibration @ source_armature_q
+            desired_armature_q = calibration @ source_armature_q
+            desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
+            swing = desired_axis.rotation_difference(source_axis)
+            desired_armature_q = swing @ desired_armature_q
+            if mapping_mmd.uses_mirrored_arm_roll_correction(scene, source_name):
                 desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
-                swing = desired_axis.rotation_difference(source_axis)
-                desired_armature_q = swing @ desired_armature_q
-                if mapping_mmd.uses_mirrored_arm_roll_correction(scene, source_name):
-                    desired_axis = (desired_armature_q @ Vector((0.0, 1.0, 0.0))).normalized()
-                    desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
-                    # MMD mirrored-arm forearm bones keep Y aligned but mirror X/Z relative to the VRM source.
-                    source_x_axis = -(source_matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))).normalized()
-                    roll_angle = _signed_projected_angle(desired_x_axis, source_x_axis, desired_axis)
-                    desired_armature_q = Quaternion(desired_axis, roll_angle) @ desired_armature_q
+                desired_x_axis = (desired_armature_q @ Vector((1.0, 0.0, 0.0))).normalized()
+                # MMD mirrored-arm forearm bones keep Y aligned but mirror X/Z relative to the VRM source.
+                source_x_axis = -(source_matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))).normalized()
+                roll_angle = _signed_projected_angle(desired_x_axis, source_x_axis, desired_axis)
+                desired_armature_q = Quaternion(desired_axis, roll_angle) @ desired_armature_q
             desired_armature_q.normalize()
             desired_matrix = Matrix.LocRotScale(
                 target_start_location,
