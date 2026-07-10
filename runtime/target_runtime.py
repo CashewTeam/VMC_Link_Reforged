@@ -234,6 +234,32 @@ def _canonical_blend_value(canonical_blends, blends, name: str) -> float:
     return mapping.get_blend_value(blends, name)
 
 
+def _mmd_root_motion_basis_location(sample, root_motion_bone, start_matrix, desired_location):
+    desired_matrix = Matrix.LocRotScale(
+        desired_location,
+        start_matrix.to_quaternion(),
+        start_matrix.to_scale(),
+    )
+    bone_ref = root_motion_bone.bone
+    parent_bone = root_motion_bone.parent
+    if parent_bone is None:
+        basis_matrix = bone_ref.convert_local_to_pose(
+            desired_matrix,
+            bone_ref.matrix_local,
+            invert=True,
+        )
+    else:
+        parent_pose_matrix = _resolve_target_pose_matrix_from_sample(parent_bone, sample, {})
+        basis_matrix = bone_ref.convert_local_to_pose(
+            desired_matrix,
+            bone_ref.matrix_local,
+            parent_matrix=parent_pose_matrix,
+            parent_matrix_local=parent_bone.bone.matrix_local,
+            invert=True,
+        )
+    return basis_matrix.to_translation()
+
+
 def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, lock_to_center: bool):
     if arm_obj is None or context.get("target_start_world") is None:
         return
@@ -250,14 +276,17 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         return
     if lock_to_center and context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
         root_motion_bone = context.get("mmd_root_motion_bone")
-        start_location = context.get("mmd_root_motion_start_location")
+        start_matrix = context.get("mmd_root_motion_start_matrix")
         start_rotation = context.get("mmd_root_motion_start_rotation")
-        if root_motion_bone is not None and (start_location is not None or start_rotation is not None):
+        if root_motion_bone is not None and start_matrix is not None and start_rotation is not None:
             bone_sample = _ensure_bone_sample(sample, root_motion_bone)
-            if start_location is not None:
-                bone_sample["location"] = start_location.copy()
-            if start_rotation is not None:
-                bone_sample["rotation_quaternion"] = start_rotation.copy()
+            bone_sample["location"] = _mmd_root_motion_basis_location(
+                sample,
+                root_motion_bone,
+                start_matrix,
+                start_matrix.to_translation(),
+            )
+            bone_sample["rotation_quaternion"] = start_rotation.copy()
         return
 
     source_name, raw = _select_root_motion_pose(root, waist, bones, include_hips=not lock_to_center)
@@ -293,23 +322,25 @@ def _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, context, l
         return
     if context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD:
         root_motion_bone = context.get("mmd_root_motion_bone")
-        start_location = context.get("mmd_root_motion_start_location")
+        start_matrix = context.get("mmd_root_motion_start_matrix")
         start_rotation = context.get("mmd_root_motion_start_rotation")
-        if root_motion_bone is None or start_location is None or start_rotation is None:
+        if root_motion_bone is None or start_matrix is None or start_rotation is None:
             return
         object_delta = (context.get("target_world_rotation_inv") or arm_obj.matrix_world.to_3x3().inverted()) @ delta_location
-        local_delta = root_motion_bone.bone.matrix_local.to_3x3().inverted_safe() @ object_delta
-        bone_sample = _ensure_bone_sample(sample, root_motion_bone)
-        bone_sample["location"] = start_location + local_delta
-        target_start_rotation = context.get("target_start_world_rotation")
-        if target_start_rotation is None:
-            target_start_rotation = arm_obj.matrix_world.to_quaternion()
+        target_start_rotation = context.get("target_start_world_rotation") or arm_obj.matrix_world.to_quaternion()
         object_delta_rotation = target_start_rotation.inverted() @ delta_rotation @ target_start_rotation
         root_rest_rotation = root_motion_bone.bone.matrix_local.to_quaternion()
         local_delta_rotation = root_rest_rotation.inverted() @ object_delta_rotation @ root_rest_rotation
         local_delta_rotation.normalize()
         desired_rotation = local_delta_rotation @ start_rotation
         desired_rotation.normalize()
+        bone_sample = _ensure_bone_sample(sample, root_motion_bone)
+        bone_sample["location"] = _mmd_root_motion_basis_location(
+            sample,
+            root_motion_bone,
+            start_matrix,
+            start_matrix.to_translation() + object_delta,
+        )
         bone_sample["rotation_quaternion"] = desired_rotation
         return
 
@@ -813,10 +844,14 @@ def evaluate_target_sample(
 ):
     sample = _empty_target_sample(arm_obj, face_obj)
 
-    if arm_obj is not None and evaluate_root_motion:
+    runtime_strategy = mapping_target_rig.resolve_runtime_strategy(arm_obj, target_context)
+    defer_mmd_root_motion = runtime_strategy == mapping_target_rig.RUNTIME_STRATEGY_MMD
+    if arm_obj is not None and evaluate_root_motion and not defer_mmd_root_motion:
         _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, target_context or {}, lock_to_center)
     if arm_obj is not None and evaluate_armature:
         _evaluate_target_armature(scene, arm_obj, preview_arm, bones, dirty_bone_names, blends, canonical_vmc_blends, target_context, sample)
+    if arm_obj is not None and evaluate_root_motion and defer_mmd_root_motion:
+        _evaluate_target_root_motion(sample, arm_obj, root, waist, bones, target_context or {}, lock_to_center)
 
     if evaluate_shapes:
         _evaluate_target_shapes(

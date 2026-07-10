@@ -619,8 +619,8 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
         "arp_root_motion_bone": None,
         "arp_root_motion_start_location": None,
         "mmd_root_motion_bone": None,
-        "mmd_root_motion_start_location": None,
         "mmd_root_motion_start_rotation": None,
+        "mmd_root_motion_start_matrix": None,
         "generic_runtime_entries": (),
         "generic_runtime_entries_by_source": {},
         "eye_left_name": None,
@@ -699,8 +699,8 @@ def _build_receiver_target_context(scene, arm_obj=None, preview_arm=None):
             root_motion_bone = arm_obj.pose.bones.get(root_motion_target) if root_motion_target else None
             if root_motion_bone is not None:
                 context["mmd_root_motion_bone"] = root_motion_bone
-                context["mmd_root_motion_start_location"] = root_motion_bone.location.copy()
                 context["mmd_root_motion_start_rotation"] = root_motion_bone.rotation_quaternion.copy()
+                context["mmd_root_motion_start_matrix"] = root_motion_bone.matrix.copy()
             if mapping.has_pose_bones(preview_arm):
                 runtime_map = mapping_target_rig.build_runtime_mapping_for_scene(scene, arm_obj)
                 entries = []
