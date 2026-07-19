@@ -1,0 +1,94 @@
+name: 手动打包并发布插件
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 读取版本并打包
+        id: package
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import zipfile
+          from pathlib import Path
+
+          root = Path.cwd()
+          manifest_text = (root / "blender_manifest.toml").read_text(encoding="utf-8")
+          init_text = (root / "__init__.py").read_text(encoding="utf-8")
+          manifest_match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', manifest_text)
+          init_match = re.search(r'(?m)^\s*"version"\s*:\s*\((\d+),\s*(\d+),\s*(\d+)\)', init_text)
+          if not manifest_match or not init_match:
+              raise SystemExit("无法读取 blender_manifest.toml 或 __init__.py 的版本号")
+
+          version = manifest_match.group(1)
+          init_version = ".".join(init_match.groups())
+          if version != init_version:
+              raise SystemExit(f"版本号不一致: manifest={version}, __init__.py={init_version}")
+
+          package_name = f"VMC_Link_Reforged_Beta_{version}_For5.1.zip"
+          package_path = root / "dist" / package_name
+          package_path.parent.mkdir(exist_ok=True)
+          include = (
+              "AGENTS.md",
+              "__init__.py",
+              "blender_manifest.toml",
+              "README.md",
+              "assets",
+              "core",
+              "docs",
+              "mapping",
+              "presets",
+              "preview",
+              "runtime",
+              "ui",
+              "wheels",
+          )
+          missing = [item for item in include if not (root / item).exists()]
+          if missing:
+              raise SystemExit(f"README 要求的打包路径不存在: {', '.join(missing)}")
+
+          with zipfile.ZipFile(package_path, "w", zipfile.ZIP_DEFLATED) as archive:
+              for item in include:
+                  path = root / item
+                  files = [path] if path.is_file() else sorted(path.rglob("*"))
+                  for file_path in files:
+                      if not file_path.is_file():
+                          continue
+                      relative = file_path.relative_to(root)
+                      if any(part in {".git", "__pycache__"} for part in relative.parts):
+                          continue
+                      if file_path.name == ".DS_Store" or file_path.suffix == ".zip":
+                          continue
+                      archive.write(file_path, relative.as_posix())
+
+          print(f"已生成 {package_path} ({package_path.stat().st_size} bytes)")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+              output.write(f"asset=dist/{package_name}\n")
+          PY
+
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ASSET: ${{ steps.package.outputs.asset }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "$ASSET" --clobber
+          else
+            gh release create "$VERSION" "$ASSET" \
+              --title "VMC_Link_Reforged Beta $VERSION" \
+              --target "$GITHUB_SHA" \
+              --generate-notes
+          fi
