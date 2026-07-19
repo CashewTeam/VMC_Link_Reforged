@@ -25,6 +25,11 @@ def resolve_bind_host(scene) -> str:
     return "127.0.0.1"
 
 
+def rotation_filter_alpha(scene) -> float:
+    smoothing = float(getattr(scene, "vmc_link_rotation_smoothing", 1.0 - constants.VMC_ROTATION_FILTER_MIN_ALPHA))
+    return 1.0 - smoothing
+
+
 def get_connection_defaults():
     prefs = get_addon_preferences()
     if prefs is None:
@@ -81,6 +86,10 @@ def _on_receiver_endpoint_changed(self, _context):
 def _on_connection_setting_changed(self, _context):
     persist_connection_defaults(self)
     state.next_tick_ts = 0.0
+
+
+def _on_rotation_smoothing_changed(self, _context):
+    state.vmc_rotation_filter_alpha = rotation_filter_alpha(self)
 
 
 def _on_live_preview_changed(self, _context):
@@ -168,6 +177,7 @@ FIXED_SCENE_PROPS = (
     "vmc_link_bind_mode",
     "vmc_link_bind_address_custom",
     "vmc_link_rate_hz",
+    "vmc_link_rotation_smoothing",
     "vmc_link_live_preview",
     "vmc_link_lock_to_center",
     "vmc_link_target_rig_type",
@@ -246,6 +256,15 @@ def ensure_scene_props():
         min=1,
         max=240,
         update=_on_connection_setting_changed,
+    )
+    scene_type.vmc_link_rotation_smoothing = bpy.props.FloatProperty(
+        name="旋转平滑",
+        description="0 为不过滤；数值越大越平滑，但动作响应也越慢",
+        default=1.0 - constants.VMC_ROTATION_FILTER_MIN_ALPHA,
+        min=0.0,
+        max=0.99,
+        subtype="FACTOR",
+        update=_on_rotation_smoothing_changed,
     )
     scene_type.vmc_link_live_preview = bpy.props.BoolProperty(
         name="实时驱动目标对象",

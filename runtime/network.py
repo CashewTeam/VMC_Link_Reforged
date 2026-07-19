@@ -443,7 +443,7 @@ def _filter_pose_rotation(previous_pose, current_pose):
         filtered_rotation = _slerp_quaternion(
             previous_rotation,
             current_rotation,
-            constants.VMC_ROTATION_FILTER_MIN_ALPHA,
+            state.vmc_rotation_filter_alpha,
         )
     return (*current_pose[:3], *filtered_rotation)
 
@@ -668,6 +668,7 @@ def start_server(scene):
         raise RuntimeError("接收器已在运行")
 
     configure_arkit_forwarding(scene)
+    state.vmc_rotation_filter_alpha = properties.rotation_filter_alpha(scene)
     _stop_arkit_forward_server()
     state.reset_runtime_buffers()
     state.cached_bone_map = {}

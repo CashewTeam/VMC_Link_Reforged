@@ -1,7 +1,7 @@
 import threading
 from collections import deque
 
-from .constants import ARKIT_BLENDSHAPE_KEYS
+from .constants import ARKIT_BLENDSHAPE_KEYS, VMC_ROTATION_FILTER_MIN_ALPHA
 
 
 receiver_socket = None
@@ -17,6 +17,7 @@ apply_timer_running = False
 receiver_thread = None
 receiver_stop_event = None
 buffer_lock = threading.Lock()
+vmc_rotation_filter_alpha = VMC_ROTATION_FILTER_MIN_ALPHA
 
 root_buf = None
 waist_buf = None

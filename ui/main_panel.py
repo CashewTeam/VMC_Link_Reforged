@@ -56,6 +56,7 @@ def draw_main_panel(layout, context):
         elif network.is_arkit_forwarding_running():
             col.label(text="RhyLive 本地转发运行中", icon="CHECKMARK")
     col.prop(scene, "vmc_link_rate_hz")
+    col.prop(scene, "vmc_link_rotation_smoothing")
     col.prop(scene, "vmc_link_live_preview")
     col.prop(scene, "vmc_link_lock_to_center")
 
