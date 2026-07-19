@@ -71,6 +71,7 @@ class VMC_LINK_PT_recording_panel(bpy.types.Panel):
         transition_col.prop(scene, "vmc_link_record_interpolation_enabled")
         transition_col.prop(scene, "vmc_link_record_transition_enabled")
         transition_col.prop(scene, "vmc_link_record_transition_frames")
+        transition_col.prop(scene, "vmc_link_record_fast_bake")
         transition_col.label(text="关闭补帧插值后，只保留实际采样落点", icon="INFO")
         transition_col.label(text="从接收启动时的初始姿态过渡到过渡结束帧姿态", icon="INFO")
 

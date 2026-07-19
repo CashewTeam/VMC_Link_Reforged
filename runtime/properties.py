@@ -188,6 +188,7 @@ FIXED_SCENE_PROPS = (
     "vmc_link_record_face_action",
     "vmc_link_record_transition_enabled",
     "vmc_link_record_transition_frames",
+    "vmc_link_record_fast_bake",
     "vmc_link_bone_map_preset",
     "vmc_link_bone_map_save_name",
     "vmc_link_vrm_is_detected",
@@ -385,6 +386,11 @@ def ensure_scene_props():
         description="起始姿态过渡占用的帧数",
         default=24,
         min=1,
+    )
+    scene_type.vmc_link_record_fast_bake = bpy.props.BoolProperty(
+        name="快速保存",
+        description="提高停止录制后的每次关键帧写入量；保存期间界面响应会略有降低",
+        default=True,
     )
     scene_type.vmc_link_bone_map_preset = bpy.props.EnumProperty(
         name="预设",

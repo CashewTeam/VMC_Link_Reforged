@@ -19,6 +19,9 @@ RECORDING_BAKE_MAX_RAW_FRAMES_PER_TICK = 8
 RECORDING_BAKE_MAX_KEYS_PER_TICK = 192
 RECORDING_BAKE_MAX_CLEAR_KEYS_PER_TICK = 192
 RECORDING_BAKE_TIMER_INTERVAL_SEC = 0.001
+RECORDING_BAKE_FAST_CHUNK_BUDGET_SEC = 0.016
+RECORDING_BAKE_FAST_MAX_RAW_FRAMES_PER_TICK = 32
+RECORDING_BAKE_FAST_MAX_KEYS_PER_TICK = 2048
 IDLE_UI_REDRAW_INTERVAL_SEC = 1.0
 
 def is_recording() -> bool:
@@ -78,6 +81,20 @@ def is_recording_interpolation_enabled(scene=None) -> bool:
         return bool(state.recording_interpolation_enabled)
     scene = scene or getattr(bpy.context, "scene", None)
     return bool(getattr(scene, "vmc_link_record_interpolation_enabled", True)) if scene is not None else True
+
+
+def _recording_bake_limits(scene):
+    if bool(getattr(scene, "vmc_link_record_fast_bake", True)):
+        return (
+            RECORDING_BAKE_FAST_CHUNK_BUDGET_SEC,
+            RECORDING_BAKE_FAST_MAX_RAW_FRAMES_PER_TICK,
+            RECORDING_BAKE_FAST_MAX_KEYS_PER_TICK,
+        )
+    return (
+        RECORDING_BAKE_CHUNK_BUDGET_SEC,
+        RECORDING_BAKE_MAX_RAW_FRAMES_PER_TICK,
+        RECORDING_BAKE_MAX_KEYS_PER_TICK,
+    )
 
 
 def get_recording_range_error(scene) -> str:
@@ -1354,6 +1371,7 @@ def _cache_recording_key(action, data_path: str, array_index: int, frame: int, v
             "array_index": int(array_index),
             "group": group,
             "points": [],
+            "pending_hold_frame": None,
         }
         state.recording_tracks[key] = track
 
@@ -1371,8 +1389,26 @@ def _cache_recording_key(action, data_path: str, array_index: int, frame: int, v
         points[-1] = (frame_value, numeric_value)
         return True
 
+    if last_value == numeric_value:
+        track["pending_hold_frame"] = frame_value
+        return False
+
+    pending_hold_frame = track.get("pending_hold_frame")
+    if pending_hold_frame is not None and last_frame < pending_hold_frame < frame_value:
+        points.append((pending_hold_frame, last_value))
+
     points.append((frame_value, numeric_value))
+    track["pending_hold_frame"] = None
     return True
+
+
+def _flush_recording_track_holds():
+    for track in state.recording_tracks.values():
+        points = track.get("points") or []
+        pending_hold_frame = track.get("pending_hold_frame")
+        if points and pending_hold_frame is not None and pending_hold_frame > points[-1][0]:
+            points.append((pending_hold_frame, points[-1][1]))
+        track["pending_hold_frame"] = None
 
 
 def _clear_fcurve_frame_range(fcurve, frame_start: int, frame_end: int):
@@ -1423,6 +1459,7 @@ def _bake_recording_track(track):
 
 
 def _bake_recording_tracks():
+    _flush_recording_track_holds()
     for track in tuple(state.recording_tracks.values()):
         _bake_recording_track(track)
 
@@ -1594,6 +1631,10 @@ def _start_recording_bake_session(scene):
         "current_track_frame_end": -1,
         "current_fcurve": None,
     }
+    chunk_budget_sec, max_raw_frames_per_tick, max_keys_per_tick = _recording_bake_limits(scene)
+    session["chunk_budget_sec"] = chunk_budget_sec
+    session["max_raw_frames_per_tick"] = max_raw_frames_per_tick
+    session["max_keys_per_tick"] = max_keys_per_tick
     state.recording_bake_session = session
     _recording_bake_progress_begin(session)
     _recording_bake_progress_update(0, session)
@@ -1613,6 +1654,7 @@ def _switch_recording_bake_to_rebuild_phase(session):
 
 
 def _switch_recording_bake_to_track_phase(session):
+    _flush_recording_track_holds()
     track_items = tuple(state.recording_tracks.values())
     session["phase"] = "bake"
     session["status_label"] = "正在写入动作曲线"
@@ -1749,7 +1791,8 @@ def _clear_recording_bake_track_chunk(session, deadline: float):
     frame_end = int(session.get("current_track_frame_end", -1))
     processed = 0
 
-    while clear_index >= 0 and processed < RECORDING_BAKE_MAX_CLEAR_KEYS_PER_TICK and time.perf_counter() < deadline:
+    max_keys_per_tick = int(session.get("max_keys_per_tick", RECORDING_BAKE_MAX_CLEAR_KEYS_PER_TICK))
+    while clear_index >= 0 and processed < max_keys_per_tick and time.perf_counter() < deadline:
         keyframe_points = fcurve.keyframe_points
         if clear_index >= len(keyframe_points):
             clear_index = len(keyframe_points) - 1
@@ -1767,10 +1810,11 @@ def _clear_recording_bake_track_chunk(session, deadline: float):
 
 
 def _process_recording_bake_tracks_chunk(session):
-    deadline = time.perf_counter() + RECORDING_BAKE_CHUNK_BUDGET_SEC
+    deadline = time.perf_counter() + float(session.get("chunk_budget_sec", RECORDING_BAKE_CHUNK_BUDGET_SEC))
     inserted_keys = 0
+    max_keys_per_tick = int(session.get("max_keys_per_tick", RECORDING_BAKE_MAX_KEYS_PER_TICK))
 
-    while time.perf_counter() < deadline and inserted_keys < RECORDING_BAKE_MAX_KEYS_PER_TICK:
+    while time.perf_counter() < deadline and inserted_keys < max_keys_per_tick:
         if session.get("current_fcurve") is None and not _prepare_recording_bake_track(session):
             return True
 
@@ -1781,7 +1825,7 @@ def _process_recording_bake_tracks_chunk(session):
         points = session.get("current_track_points") or ()
         fcurve = session.get("current_fcurve")
         point_index = int(session.get("current_track_point_index", 0))
-        limit = min(len(points), point_index + max(1, RECORDING_BAKE_MAX_KEYS_PER_TICK - inserted_keys))
+        limit = min(len(points), point_index + max(1, max_keys_per_tick - inserted_keys))
         write_count = max(0, limit - point_index)
         if write_count > 0:
             inserted = _append_recording_key_points(fcurve, points, point_index, write_count)
@@ -1858,11 +1902,12 @@ def _recording_bake_timer():
         elif phase == "rebuild":
             scene = session.get("scene")
             raw_frames = session.get("raw_frames", ())
-            deadline = time.perf_counter() + RECORDING_BAKE_CHUNK_BUDGET_SEC
+            deadline = time.perf_counter() + float(session.get("chunk_budget_sec", RECORDING_BAKE_CHUNK_BUDGET_SEC))
+            max_raw_frames_per_tick = int(session.get("max_raw_frames_per_tick", RECORDING_BAKE_MAX_RAW_FRAMES_PER_TICK))
             processed = 0
 
             while int(session.get("raw_index", 0)) < int(session.get("raw_total", 0)):
-                if processed >= RECORDING_BAKE_MAX_RAW_FRAMES_PER_TICK or time.perf_counter() >= deadline:
+                if processed >= max_raw_frames_per_tick or time.perf_counter() >= deadline:
                     break
                 raw_index = int(session["raw_index"])
                 keep_processing = _process_recording_raw_frame(scene, session, raw_frames[raw_index])
