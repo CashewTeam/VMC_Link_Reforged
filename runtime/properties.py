@@ -74,6 +74,8 @@ def _on_receiver_endpoint_changed(self, _context):
 
     if network.is_running():
         network.restart_server(self)
+    else:
+        network.update_arkit_forwarding(self)
 
 
 def _on_connection_setting_changed(self, _context):
@@ -104,6 +106,14 @@ def _on_face_source_changed(self, _context):
 
     if network.is_running():
         network.restart_server(self)
+    else:
+        network.update_arkit_forwarding(self)
+
+
+def _on_arkit_forward_setting_changed(self, _context):
+    from . import network
+
+    network.update_arkit_forwarding(self)
 
 
 def _on_armature_changed(self, _context):
@@ -164,6 +174,8 @@ FIXED_SCENE_PROPS = (
     "vmc_link_mmd_mirror_roll_side",
     "vmc_link_face_source",
     "vmc_link_arkit_port",
+    "vmc_link_arkit_forward_enabled",
+    "vmc_link_arkit_forward_port",
     "vmc_link_armature",
     "vmc_link_face_object",
     "vmc_link_preview_armature",
@@ -285,6 +297,20 @@ def ensure_scene_props():
         min=1,
         max=65535,
         update=_on_receiver_endpoint_changed,
+    )
+    scene_type.vmc_link_arkit_forward_enabled = bpy.props.BoolProperty(
+        name="本地转发 RhyLive 数据",
+        description="将收到的 RhyLive ARKit 原始 UDP 数据包完整转发到本机端口",
+        default=False,
+        update=_on_arkit_forward_setting_changed,
+    )
+    scene_type.vmc_link_arkit_forward_port = bpy.props.IntProperty(
+        name="本地转发端口",
+        description="RhyLive 原始 UDP 数据包转发到 127.0.0.1 的端口",
+        default=constants.DEFAULT_ARKIT_FORWARD_PORT,
+        min=1,
+        max=65535,
+        update=_on_arkit_forward_setting_changed,
     )
     scene_type.vmc_link_armature = bpy.props.PointerProperty(
         name="目标骨架",

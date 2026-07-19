@@ -74,12 +74,13 @@ def register():
     scene = getattr(bpy.context, "scene", None)
     if scene is not None:
         properties.ensure_intermediate_defaults_for_scene(scene)
+        network.update_arkit_forwarding(scene)
 
 
 def unregister():
     scene = getattr(bpy.context, "scene", None)
     if scene is not None:
-        network.stop_server(scene)
+        network.shutdown(scene)
     properties.unregister_scene_handlers()
     properties.unregister_scene_props()
     for cls in reversed(CLASSES):

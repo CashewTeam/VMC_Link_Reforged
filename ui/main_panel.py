@@ -46,6 +46,15 @@ def draw_main_panel(layout, context):
     col.prop(scene, "vmc_link_face_source")
     if runtime.is_arkit_face_source_enabled(scene):
         col.prop(scene, "vmc_link_arkit_port")
+    else:
+        col.prop(scene, "vmc_link_arkit_port", text="RhyLive 输入端口")
+    col.prop(scene, "vmc_link_arkit_forward_enabled")
+    if scene.vmc_link_arkit_forward_enabled:
+        col.prop(scene, "vmc_link_arkit_forward_port")
+        if scene.vmc_link_arkit_forward_port == scene.vmc_link_arkit_port:
+            col.label(text="转发端口不能与 ARKit 接收端口相同", icon="ERROR")
+        elif network.is_arkit_forwarding_running():
+            col.label(text="RhyLive 本地转发运行中", icon="CHECKMARK")
     col.prop(scene, "vmc_link_rate_hz")
     col.prop(scene, "vmc_link_live_preview")
     col.prop(scene, "vmc_link_lock_to_center")

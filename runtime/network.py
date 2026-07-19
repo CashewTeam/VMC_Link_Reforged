@@ -17,6 +17,12 @@ def is_running() -> bool:
     return state.receiver_socket is not None or state.arkit_receiver_socket is not None
 
 
+def is_arkit_forwarding_running() -> bool:
+    return state.arkit_forward_socket is not None or (
+        state.arkit_forward_enabled and state.arkit_receiver_socket is not None
+    )
+
+
 def is_session_active() -> bool:
     return bool(state.receiver_session_active)
 
@@ -27,6 +33,24 @@ def is_paused() -> bool:
 
 def _is_arkit_face_source_enabled(scene) -> bool:
     return str(getattr(scene, "vmc_link_face_source", constants.FACE_SOURCE_VMC)) == constants.FACE_SOURCE_RHYLIVE_ARKIT
+
+
+def configure_arkit_forwarding(scene):
+    state.arkit_forward_enabled = bool(getattr(scene, "vmc_link_arkit_forward_enabled", False))
+    state.arkit_forward_port = int(getattr(scene, "vmc_link_arkit_forward_port", constants.DEFAULT_ARKIT_FORWARD_PORT))
+
+
+def update_arkit_forwarding(scene):
+    configure_arkit_forwarding(scene)
+    if is_running():
+        should_receive_arkit = _is_arkit_face_source_enabled(scene) or state.arkit_forward_enabled
+        if should_receive_arkit != (state.arkit_receiver_socket is not None):
+            restart_server(scene)
+    elif state.arkit_forward_enabled:
+        _stop_arkit_forward_server()
+        _start_arkit_forward_server(scene)
+    else:
+        _stop_arkit_forward_server()
 
 
 def _build_receiver_handles(scene):
@@ -41,7 +65,7 @@ def _build_receiver_handles(scene):
         vmc_socket = create_udp_socket(bind_host, port)
         vmc_dispatcher = build_vmc_dispatcher()
         arkit_dispatcher = None
-        if _is_arkit_face_source_enabled(scene):
+        if _is_arkit_face_source_enabled(scene) or bool(getattr(scene, "vmc_link_arkit_forward_enabled", False)):
             arkit_socket = create_udp_socket(bind_host, int(scene.vmc_link_arkit_port))
             arkit_dispatcher = build_arkit_dispatcher()
     except Exception:
@@ -54,7 +78,8 @@ def _build_receiver_handles(scene):
     return bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher
 
 
-def _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher):
+def _assign_receiver_handles(scene, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher):
+    configure_arkit_forwarding(scene)
     state.receiver_socket = vmc_socket
     state.dispatcher = vmc_dispatcher
     state.arkit_receiver_socket = arkit_socket
@@ -169,7 +194,7 @@ def _receiver_thread_loop(stop_event):
 
         for sock, dispatcher, stream_name in socket_pairs:
             if sock in readable:
-                poll_socket_packets(sock, dispatcher, stream_name)
+                poll_socket_packets(sock, dispatcher, stream_name, sock is state.arkit_receiver_socket)
 
         with state.buffer_lock:
             if not state.raw_frame_pending:
@@ -206,6 +231,53 @@ def _stop_receiver_thread():
     state.receiver_thread = None
 
 
+def _arkit_forward_thread_loop(stop_event):
+    while not stop_event.is_set():
+        sock = state.arkit_forward_socket
+        if sock is None:
+            return
+        try:
+            readable, _writable, _errors = select.select([sock], [], [], 0.05)
+        except (OSError, ValueError):
+            if not stop_event.is_set():
+                time.sleep(0.01)
+            continue
+        if sock in readable:
+            poll_socket_packets(sock, None, "RhyLive Forward", forward_arkit=True, dispatch=False)
+
+
+def _start_arkit_forward_server(scene):
+    if not state.arkit_forward_enabled or state.arkit_receiver_socket is not None:
+        return
+    sock = create_udp_socket(properties.resolve_bind_host(scene), int(scene.vmc_link_arkit_port))
+    stop_event = threading.Event()
+    forward_thread = threading.Thread(
+        target=_arkit_forward_thread_loop,
+        args=(stop_event,),
+        name="VMC Link RhyLive Forward",
+        daemon=True,
+    )
+    state.arkit_forward_socket = sock
+    state.arkit_forward_stop_event = stop_event
+    state.arkit_forward_thread = forward_thread
+    forward_thread.start()
+    helpers.debug(f"RhyLive forward started on UDP {properties.resolve_bind_host(scene)}:{scene.vmc_link_arkit_port}")
+
+
+def _stop_arkit_forward_server():
+    stop_event = state.arkit_forward_stop_event
+    forward_thread = state.arkit_forward_thread
+    if stop_event is not None:
+        stop_event.set()
+    if forward_thread is not None and forward_thread.is_alive() and forward_thread is not threading.current_thread():
+        forward_thread.join(timeout=0.2)
+    if state.arkit_forward_socket is not None:
+        state.arkit_forward_socket.close()
+    state.arkit_forward_socket = None
+    state.arkit_forward_stop_event = None
+    state.arkit_forward_thread = None
+
+
 def build_vmc_dispatcher():
     dispatcher = Dispatcher()
     dispatcher.map("/VMC/Ext/Root/Pos", on_vmc_root_pos)
@@ -233,6 +305,7 @@ def restart_server(scene):
     if not is_running():
         return
 
+    configure_arkit_forwarding(scene)
     bind_host, new_socket, new_dispatcher, new_arkit_socket, new_arkit_dispatcher = _build_receiver_handles(scene)
 
     _stop_receiver_thread()
@@ -258,8 +331,8 @@ def restart_server(scene):
         helpers.debug(f"ARKit face receiver rebound to UDP {bind_host}:{scene.vmc_link_arkit_port}")
 
 
-def poll_socket_packets(sock, dispatcher, stream_name: str):
-    if sock is None or dispatcher is None:
+def poll_socket_packets(sock, dispatcher, stream_name: str, forward_arkit: bool = False, dispatch: bool = True):
+    if sock is None:
         return
 
     while True:
@@ -271,15 +344,22 @@ def poll_socket_packets(sock, dispatcher, stream_name: str):
             helpers.warn(f"{stream_name} socket receive failed", exc)
             break
 
-        try:
-            dispatcher.call_handlers_for_packet(data, client_addr)
-        except Exception as exc:
-            helpers.warn(f"Failed to process {stream_name} packet", exc)
+        if forward_arkit and state.arkit_forward_enabled and state.arkit_forward_port != sock.getsockname()[1]:
+            try:
+                sock.sendto(data, ("127.0.0.1", state.arkit_forward_port))
+            except OSError as exc:
+                helpers.warn("RhyLive packet forward failed", exc)
+
+        if dispatch:
+            try:
+                dispatcher.call_handlers_for_packet(data, client_addr)
+            except Exception as exc:
+                helpers.warn(f"Failed to process {stream_name} packet", exc)
 
 
 def poll_osc_packets():
     poll_socket_packets(state.receiver_socket, state.dispatcher, "OSC")
-    poll_socket_packets(state.arkit_receiver_socket, state.arkit_dispatcher, "ARKit OSC")
+    poll_socket_packets(state.arkit_receiver_socket, state.arkit_dispatcher, "ARKit OSC", True)
 
 
 def _mark_raw_frame_activity_locked(packet_ts: float):
@@ -589,6 +669,8 @@ def start_server(scene):
     if is_session_active():
         raise RuntimeError("接收器已在运行")
 
+    configure_arkit_forwarding(scene)
+    _stop_arkit_forward_server()
     state.reset_runtime_buffers()
     state.cached_bone_map = {}
     state.cached_blend_map = {}
@@ -602,16 +684,17 @@ def start_server(scene):
             vmc_socket.close()
         if arkit_socket is not None:
             arkit_socket.close()
+        _start_arkit_forward_server(scene)
         runtime.clear_receiver_session_state()
         raise
 
-    _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
+    _assign_receiver_handles(scene, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
     helpers.debug(f"Receiver started on UDP {bind_host}:{int(scene.vmc_link_port)}")
     if state.arkit_receiver_socket is not None:
         helpers.debug(f"ARKit face receiver started on UDP {bind_host}:{scene.vmc_link_arkit_port}")
 
 
-def pause_server():
+def pause_server(scene):
     normalize_runtime_state()
     if not is_session_active():
         raise RuntimeError("接收器尚未启动")
@@ -620,6 +703,7 @@ def pause_server():
 
     runtime.pause_recording_clock()
     _close_receiver_handles()
+    _start_arkit_forward_server(scene)
     _clear_pending_raw_frames()
     state.receiver_paused = True
     helpers.debug("Receiver paused")
@@ -634,23 +718,35 @@ def resume_server(scene):
     if not is_paused():
         raise RuntimeError("接收器当前未暂停")
 
-    bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
-    _assign_receiver_handles(vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
+    configure_arkit_forwarding(scene)
+    _stop_arkit_forward_server()
+    try:
+        bind_host, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher = _build_receiver_handles(scene)
+    except Exception:
+        _start_arkit_forward_server(scene)
+        raise
+    _assign_receiver_handles(scene, vmc_socket, vmc_dispatcher, arkit_socket, arkit_dispatcher)
     runtime.resume_recording_clock()
     state.receiver_paused = False
     state.next_tick_ts = 0.0
     helpers.debug(f"Receiver resumed on UDP {bind_host}:{int(scene.vmc_link_port)}")
 
 
-def stop_server(_scene):
+def stop_server(scene):
     normalize_runtime_state()
     if not is_session_active() and not is_running():
         return
 
     if runtime.is_recording():
-        runtime.stop_recording(_scene)
+        runtime.stop_recording(scene)
     _close_receiver_handles()
+    _start_arkit_forward_server(scene)
     state.reset_runtime_buffers()
     runtime.restore_receiver_start_state()
     runtime.clear_receiver_session_state()
     helpers.debug("Receiver stopped")
+
+
+def shutdown(scene):
+    stop_server(scene)
+    _stop_arkit_forward_server()

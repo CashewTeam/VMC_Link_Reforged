@@ -69,7 +69,7 @@ class VMC_LINK_OT_pause_receiver(bpy.types.Operator):
                 network.resume_server(scene)
                 self.report({"INFO"}, "VMC Link 接收器已继续")
             else:
-                network.pause_server()
+                network.pause_server(scene)
                 self.report({"INFO"}, "VMC Link 接收器已暂停")
         except Exception as exc:
             self.report({"ERROR"}, str(exc))
