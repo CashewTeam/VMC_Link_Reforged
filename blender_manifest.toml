@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "vmc_link"
-version = "1.3.1"
+version = "1.2.2"
 name = "VMC_Link_Reforged"
 tagline = "VMC and RhyLive ARKit receiver with mapping presets"
 maintainer = "Internet Addict"
