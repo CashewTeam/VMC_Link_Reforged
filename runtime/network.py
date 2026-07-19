@@ -439,8 +439,6 @@ def _filter_pose_rotation(previous_pose, current_pose):
     angle = math.degrees(2.0 * math.acos(dot))
     if angle <= constants.VMC_ROTATION_FILTER_DEADBAND_DEG:
         filtered_rotation = previous_rotation
-    elif angle >= constants.VMC_ROTATION_FILTER_FAST_ANGLE_DEG:
-        filtered_rotation = current_rotation
     else:
         filtered_rotation = _slerp_quaternion(
             previous_rotation,
