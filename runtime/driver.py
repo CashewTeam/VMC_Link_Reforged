@@ -2546,19 +2546,7 @@ def _process_recording_raw_frame(scene, session, raw_frame):
     lock_to_center = bool(session.get("lock_to_center", True))
     current_frame = _current_recording_frame(scene, raw_frame.get("timestamp"))
     effective_frame = min(current_frame, frame_end)
-    is_mmd_target = bool(
-        target_context
-        and target_context.get("target_runtime_strategy") == mapping_target_rig.RUNTIME_STRATEGY_MMD
-    )
-    body_dirty = bool(raw_frame.get("body_dirty"))
-    dirty_bone_names = raw_frame.get("dirty_bone_names", ())
-    if is_mmd_target and body_dirty:
-        dirty_bone_names = ()
-    evaluate_armature = bool(dirty_bone_names) or (is_mmd_target and body_dirty)
-    evaluate_shapes = bool(
-        (not use_arkit_face and raw_frame.get("dirty_vmc_blend_names", ()))
-        or (use_arkit_face and raw_frame.get("dirty_arkit_blend_names", ()))
-    )
+    dirty_bone_names = () if raw_frame.get("body_dirty") else raw_frame.get("dirty_bone_names", ())
 
     evaluated_sample = target_runtime.evaluate_target_sample(
         scene,
@@ -2577,8 +2565,6 @@ def _process_recording_raw_frame(scene, session, raw_frame):
         lock_to_center,
         use_arkit_face,
         target_context,
-        evaluate_armature=evaluate_armature,
-        evaluate_shapes=evaluate_shapes,
     )
     current_sample = _build_recording_sample_from_evaluated(arm, evaluated_sample)
     has_vmc_input = bool(
