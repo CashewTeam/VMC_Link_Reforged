@@ -39,7 +39,7 @@ CENTER_MOTION_SOURCE_KEY = "CenterMotion"
 BONE_MAPPING_EXTRA_KEYS = (CENTER_MOTION_SOURCE_KEY,)
 
 BONE_ALIASES = {
-    "Hips": ["hips", "pelvis", "root"],
+    "Hips": ["hips", "hip", "pelvis", "root"],
     "Spine": ["spine", "spine1", "spine_01"],
     "Chest": ["chest", "spine2", "spine_02"],
     "UpperChest": ["upperchest", "upper chest", "spine3", "spine_03"],
@@ -99,11 +99,11 @@ BONE_ALIASES = {
     "RightHand": ["righthand", "right wrist", "hand_r", "hand.r", "wrist_r", "wrist.r"],
     "LeftUpperLeg": ["leftupperleg", "left leg", "leftupleg", "upperleg_l", "upperleg.l", "thigh_l", "thigh.l"],
     "LeftLowerLeg": ["leftlowerleg", "left knee", "lowerleg_l", "lowerleg.l", "calf_l", "calf.l"],
-    "LeftFoot": ["leftfoot", "left ankle", "foot_l", "foot.l", "ankle_l", "ankle.l"],
+    "LeftFoot": ["leftfoot", "left ankle", "foot_l", "foot.l", "feet_l", "feet.l", "ankle_l", "ankle.l"],
     "LeftToeBase": ["lefttoebase", "left toe", "lefttoes", "toes_l", "toes.l"],
     "RightUpperLeg": ["rightupperleg", "right leg", "rightupleg", "upperleg_r", "upperleg.r", "thigh_r", "thigh.r"],
     "RightLowerLeg": ["rightlowerleg", "right knee", "lowerleg_r", "lowerleg.r", "calf_r", "calf.r"],
-    "RightFoot": ["rightfoot", "right ankle", "foot_r", "foot.r", "ankle_r", "ankle.r"],
+    "RightFoot": ["rightfoot", "right ankle", "foot_r", "foot.r", "feet_r", "feet.r", "ankle_r", "ankle.r"],
     "RightToeBase": ["righttoebase", "right toe", "righttoes", "toes_r", "toes.r"],
 }
 
@@ -142,6 +142,9 @@ def _build_finger_aliases(side_suffix: str):
                 if not is_thumb:
                     row.append(f"{short_name}.{idx:02d}.{side}")
                     row.append(f"{short_name}_{idx:02d}_{side}")
+
+            current_prefix = f"f_{blender_prefix}" if is_thumb else blender_prefix
+            row.append(f"{current_prefix}{joint_pos + 1}.{side}")
 
             aliases[vmc_name] = row
 
